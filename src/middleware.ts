@@ -1,9 +1,9 @@
-import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 
 export function middleware(request: NextRequest) {
   // Contoh: log setiap request
-  console.log('Middleware triggered:', request.method, request.url);
+  console.log("Middleware triggered:", request.method, request.url);
 
   // Contoh: blokir request jika ada header tertentu
   // if (request.headers.get('x-block') === 'true') {
@@ -15,5 +15,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/api/v1/extensi/:path*'], // Middleware hanya untuk endpoint ini
+  matcher: ["/api/v1/extensi/:path*"], // Middleware hanya untuk endpoint ini
 };
