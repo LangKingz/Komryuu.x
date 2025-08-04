@@ -1,36 +1,36 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Komryuu.x
 
-## Getting Started
+Proyek Next.js sederhana untuk [isi tujuan proyek di sini, misal: Dashboard, Website, dsb.].
 
-First, run the development server:
+## Fitur Utama
+- Next.js (React)
+- Mendukung hot reload
+- Siap deploy di Vercel
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Cara Instalasi
+1. Clone repository:
+   ```
+   git clone https://github.com/username/komryuu.x.git
+   cd komryuu.x
+   ```
+2. Install dependensi:
+   ```
+   npm install
+   ```
+
+## Menjalankan Secara Lokal
 ```
+npm run dev
+```
+Akses di [http://localhost:3000](http://localhost:3000).
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Struktur File Penting
+- `app/page.tsx` — halaman utama.
+- `public/` — aset publik (gambar, ikon, dsb.).
+- `README.md` — dokumentasi singkat project.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Kontribusi
+Kontribusi sangat terbuka! Fork, ubah, dan kirim Pull Request.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Lisensi
+[Tuliskan lisensi jika ada, contoh: MIT License]
