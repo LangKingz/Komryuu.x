@@ -4,18 +4,8 @@ import { collection, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { addDoc } from "firebase/firestore";
 import { generateSimpleId } from "@/lib/utils";
+import { extensiType } from "@/model/extensi";
 
-type extensiType = {
-  id: string;
-  name: string;
-  description?: string;
-  logo: string;
-  type: "komik" | "anime" | "cinema";
-  BaseUrl: string;
-  UrlSearch?: string;
-  location?: string;
-  createdAt: string;
-};
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
