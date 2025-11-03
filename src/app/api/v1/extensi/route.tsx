@@ -3,9 +3,17 @@ import { NextResponse } from "next/server";
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { addDoc } from "firebase/firestore";
-import { generateSimpleId } from "@/lib/utils";
+
 import { extensiType } from "@/model/extensi";
 
+function generateSimpleId(length = 8) {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let id = "";
+  for (let i = 0; i < length; i++) {
+    id += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return id;
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -41,6 +49,9 @@ export async function GET(request: Request) {
     return NextResponse.json({
       success: true,
       total: extensiList.length,
+      authenticated: {
+        admin: true,
+      },
       message: "Success, data retrieved",
       data: extensiList,
     });
@@ -53,30 +64,15 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
 
-    let {
-      name,
-      description = "",
-      logo,
-      type,
-      url,
-      Urlsearch = "",
-      location,
-      api = "",
-    } = body;
+    let { name, description = "", logo, type, url, Urlsearch = "", location, api = "" } = body;
 
     if (!name || !logo || !type || !url) {
-      return NextResponse.json(
-        { success: false, error: "All fields are required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ success: false, error: "All fields are required" }, { status: 400 });
     }
 
     const typeExtensi = ["komik", "anime", "cinema"];
     if (!typeExtensi.includes(type)) {
-      return NextResponse.json(
-        { success: false, error: "Invalid type" },
-        { status: 400 }
-      );
+      return NextResponse.json({ success: false, error: "Invalid type" }, { status: 400 });
     }
 
     if (!description) {
