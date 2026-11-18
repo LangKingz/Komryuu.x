@@ -15,5 +15,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/api/v1/extensi/:path*"], // Middleware hanya untuk endpoint ini
+  matcher: ["/api/v1/auth/:path*"],
 };

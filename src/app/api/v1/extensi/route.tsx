@@ -1,114 +1,292 @@
-/* eslint-disable prefer-const */
+import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
-import { collection, getDocs } from "firebase/firestore";
-import { db } from "@/lib/firebase";
-import { addDoc } from "firebase/firestore";
+import { authorizeAdminApiRequest, isRecord } from "@/lib/admin-api";
+import {
+  authorizeExternalApiRequest,
+  externalApiMetadata,
+} from "@/lib/external-api";
+import {
+  createFirestoreDocument,
+  deleteFirestoreDocument,
+  FirestoreRestError,
+  getFirestoreDocument,
+  listFirestoreDocuments,
+  updateFirestoreDocument,
+} from "@/lib/firestore-rest";
 
-import { extensiType } from "@/model/extensi";
+const extensionTypes = ["komik", "anime", "cinema"] as const;
+type ExtensionType = (typeof extensionTypes)[number];
+type ExtensionValidationResult =
+  | { success: true; data: Record<string, unknown> }
+  | { success: false; error: string };
 
-function generateSimpleId(length = 8) {
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-  let id = "";
-  for (let i = 0; i < length; i++) {
-    id += chars.charAt(Math.floor(Math.random() * chars.length));
+type CachedExtensions = {
+  expiresAt: number;
+  data: Array<Record<string, unknown>>;
+};
+
+let cachedExtensions: CachedExtensions | null = null;
+let extensionsRequest: Promise<Array<Record<string, unknown>>> | null = null;
+
+function isExtensionType(value: unknown): value is ExtensionType {
+  return typeof value === "string" && extensionTypes.includes(value as ExtensionType);
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
   }
-  return id;
+}
+
+function toExtensionData(body: Record<string, unknown>, partial = false): ExtensionValidationResult {
+  const fields: Record<string, unknown> = {};
+  const stringFields: Array<[string, string, string?]> = [
+    ["name", "name"],
+    ["description", "description"],
+    ["logo", "logo"],
+    ["type", "type"],
+    ["BaseUrl", "BaseUrl", "url"],
+    ["UrlSearch", "UrlSearch", "Urlsearch"],
+    ["location", "location"],
+    ["api", "api"],
+  ];
+
+  for (const [field, key, alternate] of stringFields) {
+    const value = body[key] ?? (alternate ? body[alternate] : undefined);
+    if (value !== undefined && typeof value !== "string") {
+      return { success: false, error: `${field} must be a string` };
+    }
+    if (typeof value === "string") fields[field] = value.trim();
+    else if (!partial && ["name", "logo", "type", "BaseUrl"].includes(field)) {
+      return { success: false, error: `${field} is required` };
+    }
+  }
+
+  if (body.status !== undefined) {
+    if (body.status !== "active" && body.status !== "inactive") {
+      return { success: false, error: "status must be active or inactive" };
+    }
+    fields.status = body.status;
+  }
+  if (body.nsfw !== undefined) {
+    if (typeof body.nsfw !== "boolean") {
+      return { success: false, error: "nsfw must be a boolean" };
+    }
+    fields.nsfw = body.nsfw;
+  }
+
+  if (typeof fields.name === "string" && !fields.name) {
+    return { success: false, error: "name cannot be empty" };
+  }
+  if (typeof fields.logo === "string" && !isHttpUrl(fields.logo)) {
+    return { success: false, error: "logo must be an HTTP(S) URL" };
+  }
+  if (typeof fields.BaseUrl === "string" && !isHttpUrl(fields.BaseUrl)) {
+    return { success: false, error: "BaseUrl must be an HTTP(S) URL" };
+  }
+  if (fields.type !== undefined && !isExtensionType(fields.type)) {
+    return { success: false, error: "Invalid type" };
+  }
+  if (partial && Object.keys(fields).length === 0) {
+    return { success: false, error: "At least one editable field is required" };
+  }
+
+  return { success: true, data: fields };
+}
+
+function failureResponse(error: unknown, operation: string) {
+  if (error instanceof FirestoreRestError) {
+    if (error.status === 504) {
+      return NextResponse.json({ success: false, error: "Firebase request timed out" }, { status: 504 });
+    }
+    if (error.status === 400 || error.status === 403 || error.status === 404 || error.status === 409) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.status });
+    }
+  }
+  console.error(`External extensions API failed to ${operation}`, error);
+  return NextResponse.json({ success: false, error: "Firebase service is unavailable" }, { status: 502 });
+}
+
+async function getCachedExtensions(ttlSeconds: number) {
+  if (ttlSeconds > 0 && cachedExtensions && cachedExtensions.expiresAt > Date.now()) {
+    return cachedExtensions.data;
+  }
+
+  if (!extensionsRequest) {
+    extensionsRequest = listFirestoreDocuments("EXTENSION", 1000);
+  }
+  try {
+    const extensions = await extensionsRequest;
+    if (ttlSeconds > 0) {
+      cachedExtensions = { data: extensions, expiresAt: Date.now() + ttlSeconds * 1000 };
+    } else {
+      cachedExtensions = null;
+    }
+    return extensions;
+  } finally {
+    extensionsRequest = null;
+  }
 }
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const type = searchParams.get("type");
-  const limit = searchParams.get("limit");
+  const requestedLimit = searchParams.get("limit");
+
+  if (type && !isExtensionType(type)) {
+    return NextResponse.json({ success: false, error: "Invalid type" }, { status: 400 });
+  }
+
+  let limit: number | undefined;
+  if (requestedLimit !== null) {
+    limit = Number(requestedLimit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      return NextResponse.json(
+        { success: false, error: "limit must be an integer from 1 to 100" },
+        { status: 400 }
+      );
+    }
+  }
+
+  const authorization = await authorizeExternalApiRequest(request);
+  if (!authorization.authorized) return authorization.response;
+
   try {
-    const extensiCol = collection(db, "EXTENSION");
-    const extensiSnapshot = await getDocs(extensiCol);
-    let extensiList: extensiType[] = extensiSnapshot.docs.map((doc) => {
-      const data = doc.data();
-      return {
-        id: doc.id,
-        name: data.name,
-        description: data.description,
-        logo: data.logo,
-        type: data.type,
-        BaseUrl: data.BaseUrl,
-        UrlSearch: data.UrlSearch,
-        location: data.location,
-        createdAt: data.createdAt,
-      };
+    const documents = await getCachedExtensions(authorization.settings.extensionCacheTtlSeconds);
+    let extensions = documents.filter((extension) => {
+      const active = typeof extension.status === "string"
+        ? extension.status !== "inactive"
+        : extension.isActive !== false;
+      const allowedNsfw = authorization.settings.showNsfw || (extension.nsfw !== true && extension.isNsfw !== true);
+      return active && allowedNsfw;
     });
 
-    if (type) {
-      extensiList = extensiList.filter((extensi) => extensi.type === type);
-    }
-
-    if (limit) {
-      const limitNumber = parseInt(limit, 10);
-      extensiList = extensiList.slice(0, limitNumber);
-    }
+    if (type) extensions = extensions.filter((extension) => extension.type === type);
+    const total = extensions.length;
+    if (limit !== undefined) extensions = extensions.slice(0, limit);
+    const publicExtensions = extensions.map((extension) => ({
+      id: typeof extension.id === "string" ? extension.id : "",
+      name: typeof extension.name === "string" ? extension.name : "",
+      description: typeof extension.description === "string" ? extension.description : "",
+      logo: typeof extension.logo === "string" ? extension.logo : "",
+      type: typeof extension.type === "string" ? extension.type : "",
+      BaseUrl: typeof extension.BaseUrl === "string" ? extension.BaseUrl : "",
+      UrlSearch: typeof extension.UrlSearch === "string" ? extension.UrlSearch : "",
+      location: typeof extension.location === "string" ? extension.location : "",
+      status: extension.status === "inactive" ? "inactive" : "active",
+      nsfw: extension.nsfw === true || extension.isNsfw === true,
+      createdAt: typeof extension.createdAt === "string" ? extension.createdAt : "",
+      updatedAt: typeof extension.updatedAt === "string" ? extension.updatedAt : "",
+    }));
 
     return NextResponse.json({
       success: true,
-      total: extensiList.length,
-      authenticated: {
-        admin: true,
-      },
-      message: "Success, data retrieved",
-      data: extensiList,
+      message: "Extensions retrieved",
+      total,
+      data: publicExtensions,
+      ...externalApiMetadata(authorization.settings),
     });
   } catch (error) {
-    return NextResponse.json({ success: false, error: error }, { status: 500 });
+    return failureResponse(error, "retrieve extensions");
   }
 }
 
 export async function POST(request: Request) {
+  const authorizationError = authorizeAdminApiRequest(request);
+  if (authorizationError) return authorizationError;
+
   try {
-    const body = await request.json();
-
-    let { name, description = "", logo, type, url, Urlsearch = "", location, api = "" } = body;
-
-    if (!name || !logo || !type || !url) {
-      return NextResponse.json({ success: false, error: "All fields are required" }, { status: 400 });
+    const body: unknown = await request.json();
+    if (!isRecord(body)) {
+      return NextResponse.json({ success: false, error: "Request body must be an object" }, { status: 400 });
+    }
+    const validation = toExtensionData(body);
+    if (!validation.success) {
+      return NextResponse.json({ success: false, error: validation.error }, { status: 400 });
     }
 
-    const typeExtensi = ["komik", "anime", "cinema"];
-    if (!typeExtensi.includes(type)) {
-      return NextResponse.json({ success: false, error: "Invalid type" }, { status: 400 });
-    }
-
-    if (!description) {
-      description = "No description available";
-    }
-
-    if (!Urlsearch) {
-      Urlsearch = "UrlSearch not provided";
-    }
-
-    if (!api) {
-      api = "API not provided";
-    }
-
-    const newData = {
-      id: generateSimpleId(), // generate a random ID
-      name: name,
-      location: location,
-      description: description,
-      logo: logo,
-      type: type,
-      BaseUrl: url,
-      api, // Assuming BaseUrl is the same as url
-      UrlSearch: Urlsearch || "",
-      createdAt: new Date().toISOString(), // menambah field waktu
+    const id = randomUUID().replace(/-/g, "");
+    const data = {
+      ...validation.data,
+      description: validation.data.description ?? "",
+      UrlSearch: validation.data.UrlSearch ?? "",
+      location: validation.data.location ?? "",
+      api: validation.data.api ?? "",
+      status: validation.data.status ?? "active",
+      createdAt: new Date().toISOString(),
     };
+    await createFirestoreDocument("EXTENSION", id, data);
+    cachedExtensions = null;
 
-    const extensiCol = collection(db, "EXTENSION");
-    const docRef = await addDoc(extensiCol, newData);
+    return NextResponse.json({ success: true, id, data: { id, ...data } }, { status: 201 });
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return NextResponse.json({ success: false, error: "Invalid JSON body" }, { status: 400 });
+    }
+    return failureResponse(error, "create extension");
+  }
+}
+
+export async function PUT(request: Request) {
+  const authorizationError = authorizeAdminApiRequest(request);
+  if (authorizationError) return authorizationError;
+
+  const { searchParams } = new URL(request.url);
+  try {
+    const body: unknown = await request.json();
+    if (!isRecord(body)) {
+      return NextResponse.json({ success: false, error: "Request body must be an object" }, { status: 400 });
+    }
+    const id = searchParams.get("id")?.trim() || (typeof body.id === "string" ? body.id.trim() : "");
+    if (!id) return NextResponse.json({ success: false, error: "id is required" }, { status: 400 });
+
+    const validation = toExtensionData(body, true);
+    if (!validation.success) {
+      return NextResponse.json({ success: false, error: validation.error }, { status: 400 });
+    }
+
+    const existing = await getFirestoreDocument(`EXTENSION/${id}`);
+    if (!existing) {
+      return NextResponse.json({ success: false, error: "Extension not found" }, { status: 404 });
+    }
+    await updateFirestoreDocument("EXTENSION", id, {
+      ...validation.data,
+      updatedAt: new Date().toISOString(),
+    });
+    cachedExtensions = null;
 
     return NextResponse.json({
       success: true,
-      id: docRef.id,
-      data: newData,
+      id,
+      data: { ...existing, ...validation.data, id },
     });
   } catch (error) {
-    return NextResponse.json({ success: false, error: error }, { status: 500 });
+    if (error instanceof SyntaxError) {
+      return NextResponse.json({ success: false, error: "Invalid JSON body" }, { status: 400 });
+    }
+    return failureResponse(error, "update extension");
+  }
+}
+
+export async function DELETE(request: Request) {
+  const authorizationError = authorizeAdminApiRequest(request);
+  if (authorizationError) return authorizationError;
+
+  const id = new URL(request.url).searchParams.get("id")?.trim();
+  if (!id) return NextResponse.json({ success: false, error: "id is required" }, { status: 400 });
+
+  try {
+    const existing = await getFirestoreDocument(`EXTENSION/${id}`);
+    if (!existing) {
+      return NextResponse.json({ success: false, error: "Extension not found" }, { status: 404 });
+    }
+    await deleteFirestoreDocument("EXTENSION", id);
+    cachedExtensions = null;
+    return NextResponse.json({ success: true, id });
+  } catch (error) {
+    return failureResponse(error, "delete extension");
   }
 }

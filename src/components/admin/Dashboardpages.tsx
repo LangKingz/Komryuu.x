@@ -1,174 +1,294 @@
 "use client";
-import React, { useEffect, useState } from "react";
 
-type Extensi = {
-  id?: string;
+import { collection, doc, onSnapshot, Timestamp } from "firebase/firestore";
+import { useEffect, useMemo, useState } from "react";
+import { db } from "@/lib/firebase";
+import { DEFAULT_APP_SETTINGS, normalizeAppSettings, type AppSettings } from "@/model/app-settings";
+
+type ExtensionRecord = {
+  id: string;
   name: string;
-  description?: string;
-  logo?: string;
   type: string;
-  location?: string;
-  BaseUrl?: string;
-  UrlSearch?: string;
-  createdAt?: string;
+  status: "active" | "inactive";
+  createdAt: unknown;
 };
 
+type UserRecord = {
+  id: string;
+  name: string;
+  email: string;
+  status: "active" | "inactive";
+  createdAt: unknown;
+};
+
+type ActivityRecord = {
+  id: string;
+  action: string;
+  detail: string;
+  userId: string;
+  date: Date;
+};
+
+type ListenerState = {
+  ready: boolean;
+  error: string | null;
+};
+
+type ListenerName = "users" | "extensions" | "settings" | "activity";
+
+function parseDate(value: unknown): Date | null {
+  let date: Date | null = null;
+  if (value instanceof Timestamp) date = value.toDate();
+  else if (value instanceof Date) date = value;
+  else if (typeof value === "string" || typeof value === "number") date = new Date(value);
+  return date && !Number.isNaN(date.getTime()) ? date : null;
+}
+
+function readStatus(value: unknown): "active" | "inactive" {
+  return value === "inactive" || value === false ? "inactive" : "active";
+}
+
 export default function Dashboardpages() {
-  const [items, setItems] = useState<Extensi[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [typeFilter, setTypeFilter] = useState<string>("all");
-  const [limit, setLimit] = useState<number | "">("");
-
-  async function fetchData() {
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams();
-
-      if (typeFilter !== "all") params.set("type", typeFilter);
-      if (limit !== "") params.set("limit", String(limit));
-
-      const res = await fetch(`/api/v1/extensi?${params.toString()}`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`Server returned ${res.status}`);
-      const json = await res.json();
-      setItems(json.data || []);
-    } catch (err: any) {
-      setError(err.message || "Unknown error");
-    } finally {
-      setLoading(false);
-    }
-  }
+  const [users, setUsers] = useState<UserRecord[]>([]);
+  const [extensions, setExtensions] = useState<ExtensionRecord[]>([]);
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
+  const [activity, setActivity] = useState<ActivityRecord[]>([]);
+  const [listeners, setListeners] = useState<Record<ListenerName, ListenerState>>({
+    users: { ready: false, error: null },
+    extensions: { ready: false, error: null },
+    settings: { ready: false, error: null },
+    activity: { ready: false, error: null },
+  });
 
   useEffect(() => {
-    fetchData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    function updateListener(name: ListenerName, error: string | null = null) {
+      setListeners((current) => ({ ...current, [name]: { ready: true, error } }));
+    }
+
+    const stopUsers = onSnapshot(
+      collection(db, "users"),
+      (snapshot) => {
+        setUsers(snapshot.docs.map((item) => {
+          const data = item.data();
+          return {
+            id: item.id,
+            name: typeof data.name === "string" ? data.name : "",
+            email: typeof data.email === "string" ? data.email : "",
+            status: readStatus(data.status),
+            createdAt: data.createdAt,
+          };
+        }));
+        updateListener("users");
+      },
+      (error) => updateListener("users", error.message)
+    );
+    const stopExtensions = onSnapshot(
+      collection(db, "EXTENSION"),
+      (snapshot) => {
+        setExtensions(snapshot.docs.map((item) => {
+          const data = item.data();
+          return {
+            id: item.id,
+            name: typeof data.name === "string" ? data.name : "Tanpa nama",
+            type: typeof data.type === "string" ? data.type : "lainnya",
+            status: readStatus(data.status === "active" || data.status === "inactive" ? data.status : data.isActive),
+            createdAt: data.createdAt,
+          };
+        }));
+        updateListener("extensions");
+      },
+      (error) => updateListener("extensions", error.message)
+    );
+    const stopSettings = onSnapshot(
+      doc(db, "SETTINGS", "app_config"),
+      (snapshot) => {
+        setSettings(normalizeAppSettings(snapshot.exists() ? snapshot.data() : {}));
+        updateListener("settings");
+      },
+      (error) => updateListener("settings", error.message)
+    );
+    const stopActivity = onSnapshot(
+      collection(db, "ACTIVITY"),
+      (snapshot) => {
+        setActivity(snapshot.docs.flatMap((item) => {
+          const data = item.data();
+          const date = parseDate(data.createdAt);
+          if (!date) return [];
+          return [{
+            id: item.id,
+            action: typeof data.action === "string" ? data.action : "Aktivitas",
+            detail: typeof data.detail === "string" ? data.detail : "",
+            userId: typeof data.userId === "string" ? data.userId : "",
+            date,
+          }];
+        }));
+        updateListener("activity");
+      },
+      (error) => {
+        setActivity([]);
+        updateListener("activity", error.message);
+      }
+    );
+
+    return () => {
+      stopUsers();
+      stopExtensions();
+      stopSettings();
+      stopActivity();
+    };
   }, []);
 
-  function onApplyFilters() {
-    fetchData();
-  }
+  const countsByCategory = useMemo(() => {
+    const categories = ["komik", "anime", "cinema"];
+    return categories.map((type) => {
+      const items = extensions.filter((extension) => extension.type === type);
+      return {
+        type,
+        active: items.filter((extension) => extension.status === "active").length,
+        inactive: items.filter((extension) => extension.status === "inactive").length,
+        total: items.length,
+      };
+    });
+  }, [extensions]);
 
-  function formatDate(d?: string) {
-    if (!d) return "-";
-    try {
-      return new Date(d).toLocaleString();
-    } catch {
-      return d;
-    }
-  }
+  const fallbackActivity = useMemo(() => [
+    ...users.flatMap((user) => {
+      const date = parseDate(user.createdAt);
+      return date ? [{
+        id: `user-${user.id}`,
+        action: "Pengguna terdaftar",
+        detail: user.name || user.email,
+        userId: user.id,
+        date,
+      }] : [];
+    }),
+    ...extensions.flatMap((extension) => {
+      const date = parseDate(extension.createdAt);
+      return date ? [{
+        id: `extension-${extension.id}`,
+        action: "Ekstensi ditambahkan",
+        detail: extension.name,
+        userId: "",
+        date,
+      }] : [];
+    }),
+  ], [extensions, users]);
+
+  const latestActivity = useMemo(
+    () => [...(activity.length > 0 ? activity : fallbackActivity)]
+      .sort((first, second) => second.date.getTime() - first.date.getTime())
+      .slice(0, 6),
+    [activity, fallbackActivity]
+  );
+  const isLoading = Object.values(listeners).some((listener) => !listener.ready);
+  const hasCoreError = ["users", "extensions", "settings"].some((name) =>
+    Boolean(listeners[name as ListenerName].error)
+  );
+  const activityError = listeners.activity.error;
 
   return (
-    <div className="p-6 bg-slate-900 text-white shadow-md">
-      <header className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-2xl font-semibold">Dashboard Extensions</h2>
-          <p className="text-sm text-slate-300">Kelola dan lihat extension yang tersimpan di Firestore</p>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={fetchData} className="px-4 py-2 bg-sky-600 hover:bg-sky-500 rounded text-sm">
-            Refresh
-          </button>
-        </div>
-      </header>
+    <section className="min-h-full bg-slate-950 p-4 text-white md:p-8">
+      <div className="mx-auto max-w-7xl">
+        <header className="mb-7">
+          <p className="text-sm font-medium uppercase tracking-[0.2em] text-sky-400">Monitoring</p>
+          <h1 className="mt-2 text-3xl font-semibold">Dashboard</h1>
+          <p className="mt-2 text-sm text-slate-400">Seluruh metrik diperbarui langsung dari Firestore.</p>
+        </header>
 
-      <section className="mb-4 grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div className="p-4 bg-slate-800 rounded">
-          <div className="text-sm text-slate-400">Total</div>
-          <div className="text-xl font-bold">{items.length}</div>
-        </div>
-
-        <div className="p-4 bg-slate-800 rounded">
-          <div className="text-sm text-slate-400">Filter by type</div>
-          <select
-            value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value)}
-            className="mt-2 w-full bg-slate-700 text-white px-3 py-2 rounded"
-          >
-            <option value="all">All</option>
-            <option value="komik">Komik</option>
-            <option value="anime">Anime</option>
-            <option value="cinema">Cinema</option>
-          </select>
-        </div>
-
-        <div className="p-4 bg-slate-800 rounded">
-          <div className="text-sm text-slate-400">Limit</div>
-          <div className="flex gap-2 mt-2">
-            <input
-              type="number"
-              value={limit as any}
-              onChange={(e) => setLimit(e.target.value === "" ? "" : parseInt(e.target.value))}
-              className="w-full bg-slate-700 text-white px-3 py-2 rounded"
-              placeholder="e.g. 10"
-            />
-            <button onClick={onApplyFilters} className="px-4 bg-emerald-600 hover:bg-emerald-500 rounded text-sm">
-              Apply
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        {loading ? (
-          <div className="py-6 text-center text-slate-300">Loading...</div>
-        ) : error ? (
-          <div className="py-6 text-center text-red-400">Error: {error}</div>
-        ) : items.length === 0 ? (
-          <div className="py-6 text-center text-slate-400">No extensions found</div>
-        ) : (
-          <div className="overflow-x-auto rounded bg-slate-800">
-            <table className="w-full text-left min-w-[700px]">
-              <thead className="text-slate-400 text-sm">
-                <tr>
-                  <th className="px-4 py-3"></th>
-                  <th className="px-4 py-3">Name</th>
-                  <th className="px-4 py-3">Type</th>
-                  <th className="px-4 py-3">Location</th>
-                  <th className="px-4 py-3">Base URL</th>
-
-                  <th className="px-4 py-3">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((it) => (
-                  <tr key={it.id} className="border-t border-slate-700">
-                    <td className="px-4 py-3">
-                      <img src={it.logo} alt={it.name} className="w-10 h-10 object-contain rounded" />
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="font-medium">{it.name}</div>
-                      <div className="text-xs text-slate-400">{it.description}</div>
-                    </td>
-                    <td className="px-4 py-3">{it.type}</td>
-                    <td className="px-4 py-3">{it.location || "-"}</td>
-                    <td className="px-4 py-3 break-words">{it.BaseUrl || "-"}</td>
-
-                    <td className="px-4 py-3">
-                      <div className="flex gap-2">
-                        <a
-                          href={it.BaseUrl || "#"}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-xs px-2 py-1 bg-slate-700 rounded hover:bg-slate-600"
-                        >
-                          Visit
-                        </a>
-                        <button
-                          onClick={() => navigator.clipboard?.writeText(it.BaseUrl || "")}
-                          className="text-xs px-2 py-1 bg-slate-700 rounded hover:bg-slate-600"
-                        >
-                          Copy URL
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {(hasCoreError || activityError) && (
+          <div role="alert" className="mb-5 rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-200">
+            {hasCoreError
+              ? "Beberapa listener Firestore gagal. Periksa Firestore Security Rules dan koneksi."
+              : "Log aktivitas tidak dapat diakses; dashboard menampilkan aktivitas turunan data."}
+            {activityError && <p className="mt-1 text-xs text-amber-300">{activityError}</p>}
           </div>
         )}
-      </section>
-    </div>
+
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <article className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+            <p className="text-sm text-slate-400">Total ekstensi</p>
+            <p className="mt-3 text-3xl font-semibold">{isLoading ? "—" : extensions.length}</p>
+            <p className="mt-2 text-xs text-slate-500">Data live dari EXTENSION</p>
+          </article>
+          <article className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+            <p className="text-sm text-slate-400">Pengguna terdaftar</p>
+            <p className="mt-3 text-3xl font-semibold">{isLoading ? "—" : users.length}</p>
+            <p className="mt-2 text-xs text-slate-500">Data live dari users</p>
+          </article>
+          <article className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+            <p className="text-sm text-slate-400">Status server</p>
+            <p className={`mt-3 text-xl font-semibold ${isLoading ? "text-amber-300" : hasCoreError ? "text-rose-300" : "text-emerald-300"}`}>
+              {isLoading ? "Memuat..." : hasCoreError ? "Terbatas" : "Firestore online"}
+            </p>
+            <p className="mt-2 text-xs text-slate-500">Berdasarkan status listener</p>
+          </article>
+          <article className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+            <p className="text-sm text-slate-400">Mode aplikasi</p>
+            <p className={`mt-3 text-xl font-semibold ${settings.maintenanceMode ? "text-amber-300" : "text-emerald-300"}`}>
+              {settings.maintenanceMode ? "Maintenance" : "Normal"}
+            </p>
+            <p className="mt-2 truncate text-xs text-slate-500">
+              {settings.maintenanceMode ? settings.maintenanceMessage : settings.announcement || "Tidak ada pengumuman"}
+            </p>
+          </article>
+        </div>
+
+        <section className="mt-6 rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold">Status ekstensi per kategori</h2>
+            <p className="mt-1 text-sm text-slate-400">Ekstensi lama tanpa field status dihitung aktif.</p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            {countsByCategory.map((category) => (
+              <article key={category.type} className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-medium capitalize">{category.type}</h3>
+                  <span className="text-xs text-slate-500">{category.total} total</span>
+                </div>
+                <div className="mt-4 flex gap-3 text-sm">
+                  <span className="rounded-full bg-emerald-400/10 px-3 py-1 text-emerald-300">
+                    {category.active} aktif
+                  </span>
+                  <span className="rounded-full bg-slate-700 px-3 py-1 text-slate-300">
+                    {category.inactive} nonaktif
+                  </span>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="mt-6 rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+          <header className="mb-4 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold">Aktivitas terbaru</h2>
+              <p className="mt-1 text-sm text-slate-400">Log ACTIVITY live atau fallback waktu pembuatan data.</p>
+            </div>
+            <span className="rounded-full bg-sky-400/10 px-3 py-1 text-xs font-medium text-sky-300">
+              {activity.length ? "Live log" : "Fallback"}
+            </span>
+          </header>
+          {isLoading ? (
+            <p className="py-6 text-center text-sm text-slate-400">Memuat aktivitas...</p>
+          ) : latestActivity.length === 0 ? (
+            <p className="py-6 text-center text-sm text-slate-400">Belum ada aktivitas.</p>
+          ) : (
+            <ul className="divide-y divide-slate-800">
+              {latestActivity.map((item) => (
+                <li key={item.id} className="flex flex-col gap-1 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm text-slate-200">{item.action}</p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      {item.detail || (item.userId ? `Pengguna ${item.userId}` : "")}
+                    </p>
+                  </div>
+                  <time className="text-xs text-slate-500">{item.date.toLocaleString()}</time>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+    </section>
   );
 }
