@@ -6,129 +6,93 @@ import {
   deleteDoc,
   doc,
   onSnapshot,
+  orderBy,
+  query,
   serverTimestamp,
   updateDoc,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { db, auth } from "@/lib/firebase";
 import { logAdminAction } from "@/lib/admin-activity";
 import {
+  AlertCircle,
+  AlertTriangle,
   Bug,
-  CheckCircle,
+  CheckCircle2,
   Clock,
-  DotsThreeVertical,
+  ExternalLink,
   Eye,
-  FileText,
-  Hourglass,
-  MagnifyingGlass,
-  PencilSimple,
-  Trash,
-  WarningCircle,
+  Filter,
+  Inbox,
+  Layers,
+  MessageSquare,
+  RefreshCw,
+  Search,
+  Smartphone,
+  Trash2,
+  User,
   Wrench,
   X,
-} from "@phosphor-icons/react";
+} from "lucide-react";
 
-export type ReportItem = {
+export type ReportStatus = "pending" | "in_progress" | "resolved";
+export type ReportType = "scraper_error" | "broken_chapter" | "bug" | "feedback";
+
+export interface ReportItem {
   id: string;
-  type: "broken_scraper" | "broken_chapter" | "app_bug" | "feedback" | string;
-  extensionId?: string;
-  comicTitle?: string;
-  chapterNumber?: string;
-  message: string;
+  type: ReportType;
+  title: string;
+  description: string;
+  extensionName?: string;
+  comicId?: string;
+  chapterTitle?: string;
   userEmail?: string;
   uid?: string;
-  appVersion?: string;
-  deviceInfo?: unknown;
-  status: "pending" | "in_progress" | "resolved";
-  adminNotes?: string;
+  deviceInfo?: Record<string, unknown>;
+  status: ReportStatus;
   createdAt: string;
-};
-
-type StatusFilter = "all" | "pending" | "in_progress" | "resolved";
-
-function statusBadge(status: ReportItem["status"]) {
-  switch (status) {
-    case "pending":
-      return {
-        label: "Pending",
-        cls: "border-amber-400/30 bg-amber-400/10 text-amber-300",
-        icon: Hourglass,
-      };
-    case "in_progress":
-      return {
-        label: "Sedang Diperbaiki",
-        cls: "border-sky-400/30 bg-sky-400/10 text-sky-300",
-        icon: Wrench,
-      };
-    case "resolved":
-      return {
-        label: "Selesai",
-        cls: "border-emerald-400/30 bg-emerald-400/10 text-emerald-300",
-        icon: CheckCircle,
-      };
-    default:
-      return {
-        label: status,
-        cls: "border-slate-700 bg-slate-800 text-slate-300",
-        icon: Clock,
-      };
-  }
-}
-
-function typeBadge(type: string) {
-  switch (type) {
-    case "broken_scraper":
-      return { label: "Scraper Error", cls: "bg-rose-500/10 text-rose-300 border-rose-500/20" };
-    case "broken_chapter":
-      return { label: "Chapter Rusak", cls: "bg-amber-500/10 text-amber-300 border-amber-500/20" };
-    case "app_bug":
-      return { label: "Bug Aplikasi", cls: "bg-purple-500/10 text-purple-300 border-purple-500/20" };
-    default:
-      return { label: "Feedback User", cls: "bg-sky-500/10 text-sky-300 border-sky-500/20" };
-  }
+  updatedAt?: unknown;
 }
 
 export default function ReportPages() {
   const [reports, setReports] = useState<ReportItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
   const [selectedReport, setSelectedReport] = useState<ReportItem | null>(null);
-  const [adminNotesDraft, setAdminNotesDraft] = useState("");
-  const [updating, setUpdating] = useState(false);
   const [toast, setToast] = useState<{ kind: "success" | "error"; message: string } | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const currentAdminEmail = auth.currentUser?.email || "admin@komryuu.x";
 
   useEffect(() => {
+    const q = query(collection(db, "REPORTS"), orderBy("createdAt", "desc"));
     const unsub = onSnapshot(
-      collection(db, "REPORTS"),
+      q,
       (snapshot) => {
-        const items: ReportItem[] = [];
-        snapshot.forEach((d) => {
-          const data = d.data();
-          items.push({
-            id: d.id,
-            type: data.type || "app_bug",
-            extensionId: data.extensionId || "",
-            comicTitle: data.comicTitle || "",
-            chapterNumber: data.chapterNumber || "",
-            message: data.message || "",
-            userEmail: data.userEmail || "",
-            uid: data.uid || "",
-            appVersion: data.appVersion || "1.0.0",
-            deviceInfo: data.deviceInfo,
-            status: data.status === "in_progress" || data.status === "resolved" ? data.status : "pending",
-            adminNotes: data.adminNotes || "",
-            createdAt: data.createdAt || new Date().toISOString(),
-          });
+        const list: ReportItem[] = snapshot.docs.map((docSnap) => {
+          const d = docSnap.data();
+          return {
+            id: docSnap.id,
+            type: d.type || "feedback",
+            title: d.title || "Tanpa Judul",
+            description: d.description || "",
+            extensionName: d.extensionName || "",
+            comicId: d.comicId || "",
+            chapterTitle: d.chapterTitle || "",
+            userEmail: d.userEmail || "",
+            uid: d.uid || "",
+            deviceInfo: d.deviceInfo || {},
+            status: d.status || "pending",
+            createdAt: d.createdAt || new Date().toISOString(),
+            updatedAt: d.updatedAt,
+          };
         });
-
-        // Urutkan berdasarkan waktu pembuatan terbaru
-        items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        setReports(items);
+        setReports(list);
         setLoading(false);
       },
-      (err) => {
-        console.error("Error listening to REPORTS:", err);
+      (error) => {
+        console.error("Error reading reports:", error);
         setLoading(false);
       }
     );
@@ -142,82 +106,148 @@ export default function ReportPages() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  const counts = useMemo(() => {
+    return {
+      total: reports.length,
+      pending: reports.filter((r) => r.status === "pending").length,
+      inProgress: reports.filter((r) => r.status === "in_progress").length,
+      resolved: reports.filter((r) => r.status === "resolved").length,
+    };
+  }, [reports]);
+
   const filteredReports = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return reports.filter((item) => {
+    const s = search.trim().toLowerCase();
+    return reports.filter((r) => {
+      const matchStatus = statusFilter === "all" || r.status === statusFilter;
+      const matchType = typeFilter === "all" || r.type === typeFilter;
       const matchSearch =
-        !term ||
-        item.message.toLowerCase().includes(term) ||
-        (item.comicTitle && item.comicTitle.toLowerCase().includes(term)) ||
-        (item.extensionId && item.extensionId.toLowerCase().includes(term)) ||
-        (item.userEmail && item.userEmail.toLowerCase().includes(term));
-
-      const matchStatus = statusFilter === "all" || item.status === statusFilter;
-      const matchType = typeFilter === "all" || item.type === typeFilter;
-      return matchSearch && matchStatus && matchType;
+        !s ||
+        r.title.toLowerCase().includes(s) ||
+        r.description.toLowerCase().includes(s) ||
+        (r.extensionName && r.extensionName.toLowerCase().includes(s)) ||
+        (r.comicId && r.comicId.toLowerCase().includes(s)) ||
+        (r.userEmail && r.userEmail.toLowerCase().includes(s));
+      return matchStatus && matchType && matchSearch;
     });
-  }, [reports, search, statusFilter, typeFilter]);
+  }, [reports, statusFilter, typeFilter, search]);
 
-  const pendingCount = reports.filter((r) => r.status === "pending").length;
-  const inProgressCount = reports.filter((r) => r.status === "in_progress").length;
-  const resolvedCount = reports.filter((r) => r.status === "resolved").length;
-
-  async function updateReportStatus(reportId: string, newStatus: ReportItem["status"], notes?: string) {
-    setUpdating(true);
+  async function updateReportStatus(report: ReportItem, newStatus: ReportStatus) {
+    setBusyId(report.id);
     try {
-      await updateDoc(doc(db, "REPORTS", reportId), {
+      await updateDoc(doc(db, "REPORTS", report.id), {
         status: newStatus,
-        ...(notes !== undefined ? { adminNotes: notes } : {}),
         updatedAt: serverTimestamp(),
       });
       await logAdminAction(
-        "admin@komryuu.core",
-        `Laporan ditandai: ${newStatus.toUpperCase()}`,
-        `Report: ${reportId}`,
-        notes ? `Catatan: ${notes}` : `Status diubah menjadi ${newStatus}`,
-        "system"
+        currentAdminEmail,
+        "Status Laporan Diperbarui",
+        report.extensionName || report.title,
+        `Tiket ${report.id} (${report.title}) diubah status menjadi: ${newStatus.toUpperCase()}`
       );
       setToast({ kind: "success", message: `Status laporan berhasil diubah ke ${newStatus}.` });
-      if (selectedReport && selectedReport.id === reportId) {
-        setSelectedReport((prev) => (prev ? { ...prev, status: newStatus, ...(notes !== undefined ? { adminNotes: notes } : {}) } : null));
+      if (selectedReport?.id === report.id) {
+        setSelectedReport({ ...selectedReport, status: newStatus });
       }
-    } catch (e) {
-      console.error(e);
+    } catch (err) {
+      console.error("Update status error:", err);
       setToast({ kind: "error", message: "Gagal memperbarui status laporan." });
     } finally {
-      setUpdating(false);
+      setBusyId(null);
     }
   }
 
-  async function deleteReport(reportId: string) {
-    if (!confirm("Hapus laporan ini secara permanen?")) return;
-    setUpdating(true);
+  async function deleteReport(report: ReportItem) {
+    if (!confirm(`Hapus laporan "${report.title}"?`)) return;
+    setBusyId(report.id);
     try {
-      await deleteDoc(doc(db, "REPORTS", reportId));
-      await logAdminAction("admin@komryuu.core", "Laporan dihapus", `Report: ${reportId}`, "Hapus laporan", "system");
+      await deleteDoc(doc(db, "REPORTS", report.id));
+      await logAdminAction(
+        currentAdminEmail,
+        "Laporan Dihapus",
+        report.title,
+        `Laporan ID ${report.id} dihapus dari antrean.`
+      );
       setToast({ kind: "success", message: "Laporan berhasil dihapus." });
-      if (selectedReport?.id === reportId) {
+      if (selectedReport?.id === report.id) {
         setSelectedReport(null);
       }
-    } catch (e) {
-      console.error(e);
+    } catch (err) {
+      console.error("Delete report error:", err);
       setToast({ kind: "error", message: "Gagal menghapus laporan." });
     } finally {
-      setUpdating(false);
+      setBusyId(null);
+    }
+  }
+
+  function getTypeBadge(type: ReportType) {
+    switch (type) {
+      case "scraper_error":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/30 bg-rose-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-rose-300">
+            <AlertCircle size={12} />
+            Error Scraper
+          </span>
+        );
+      case "broken_chapter":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-amber-300">
+            <AlertTriangle size={12} />
+            Chapter Rusak
+          </span>
+        );
+      case "bug":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full border border-purple-500/30 bg-purple-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-purple-300">
+            <Bug size={12} />
+            Bug App
+          </span>
+        );
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-sky-300">
+            <MessageSquare size={12} />
+            Feedback
+          </span>
+        );
+    }
+  }
+
+  function getStatusBadge(status: ReportStatus) {
+    switch (status) {
+      case "pending":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/10 px-2.5 py-0.5 text-[11px] font-semibold text-amber-300">
+            <Clock size={12} />
+            Menunggu
+          </span>
+        );
+      case "in_progress":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full border border-indigo-400/30 bg-indigo-400/10 px-2.5 py-0.5 text-[11px] font-semibold text-indigo-300">
+            <Wrench size={12} />
+            Sedang Diperbaiki
+          </span>
+        );
+      case "resolved":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-300">
+            <CheckCircle2 size={12} />
+            Selesai
+          </span>
+        );
     }
   }
 
   return (
     <section className="min-h-full bg-[#14141e] p-4 text-white md:p-8">
       <div className="mx-auto max-w-7xl">
-        {/* HEADER */}
-        <div className="mb-7">
-          <p className="text-sm font-medium uppercase tracking-[0.2em] text-sky-400">Pusat Bantuan &amp; Scraper</p>
-          <h1 className="mt-2 text-3xl font-semibold">Laporan &amp; Tiket Masalah</h1>
-          <p className="mt-1 text-sm text-slate-400">
-            Laporan error otomatis scraper dari aplikasi Android dan aduan chapter rusak oleh pengguna.
+        <header className="mb-7">
+          <p className="text-sm font-medium uppercase tracking-[0.2em] text-indigo-400">Pusat Bantuan &amp; Scraper</p>
+          <h1 className="mt-2 text-3xl font-semibold">Laporan Masalah &amp; Tiket</h1>
+          <p className="mt-2 text-sm text-slate-400">
+            Pantau laporan otomatis error scraper dari Android dan feedback chapter rusak pengguna.
           </p>
-        </div>
+        </header>
 
         {toast && (
           <div
@@ -231,257 +261,325 @@ export default function ReportPages() {
           </div>
         )}
 
-        {/* METRICS */}
-        <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <article className="rounded-2xl border border-white/[0.07] bg-[#1c1c28] p-5">
-            <p className="text-xs text-slate-400">Total Tiket Laporan</p>
-            <p className="mt-2 text-3xl font-bold text-white">{loading ? "—" : reports.length}</p>
-            <p className="mt-1 text-xs text-slate-500">Semua laporan masuk</p>
-          </article>
-          <article className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-5">
-            <p className="text-xs text-amber-300 font-medium">Perlu Penanganan (Pending)</p>
-            <p className="mt-2 text-3xl font-bold text-amber-300">{loading ? "—" : pendingCount}</p>
-            <p className="mt-1 text-xs text-amber-300/70">Menunggu pengecekan admin</p>
-          </article>
-          <article className="rounded-2xl border border-sky-500/20 bg-sky-500/10 p-5">
-            <p className="text-xs text-sky-300 font-medium">Sedang Diperbaiki</p>
-            <p className="mt-2 text-3xl font-bold text-sky-300">{loading ? "—" : inProgressCount}</p>
-            <p className="mt-1 text-xs text-sky-300/70">Dalam investigasi scraper</p>
-          </article>
-          <article className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-5">
-            <p className="text-xs text-emerald-300 font-medium">Selesai / Teratasi</p>
-            <p className="mt-2 text-3xl font-bold text-emerald-300">{loading ? "—" : resolvedCount}</p>
-            <p className="mt-1 text-xs text-emerald-300/70">Tiket berhasil diselesaikan</p>
-          </article>
+        {/* METRICS CARDS */}
+        <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-medium text-slate-400">Total Tiket Masuk</p>
+                <p className="mt-2 text-3xl font-bold text-white">{counts.total}</p>
+              </div>
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-400">
+                <Inbox size={22} />
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-medium text-slate-400">Menunggu Penanganan</p>
+                <p className="mt-2 text-3xl font-bold text-amber-300">{counts.pending}</p>
+              </div>
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-500/10 text-amber-400">
+                <Clock size={22} />
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-medium text-slate-400">Sedang Diperbaiki</p>
+                <p className="mt-2 text-3xl font-bold text-indigo-300">{counts.inProgress}</p>
+              </div>
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-400">
+                <Wrench size={22} />
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-medium text-slate-400">Terselesaikan</p>
+                <p className="mt-2 text-3xl font-bold text-emerald-300">{counts.resolved}</p>
+              </div>
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400">
+                <CheckCircle2 size={22} />
+              </div>
+            </div>
+          </div>
         </div>
 
-        {/* CONTROLS */}
-        <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-white/[0.07] bg-[#1c1c28] p-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-wrap gap-1">
+        {/* CONTROLS: FILTER & SEARCH */}
+        <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Status Tabs */}
             {[
               { id: "all", label: "Semua Status" },
-              { id: "pending", label: `Pending (${pendingCount})` },
-              { id: "in_progress", label: `Diperbaiki (${inProgressCount})` },
-              { id: "resolved", label: `Selesai (${resolvedCount})` },
+              { id: "pending", label: `Menunggu (${counts.pending})` },
+              { id: "in_progress", label: `Dalam Proses (${counts.inProgress})` },
+              { id: "resolved", label: `Selesai (${counts.resolved})` },
             ].map((tab) => (
               <button
                 key={tab.id}
                 type="button"
-                onClick={() => setStatusFilter(tab.id as StatusFilter)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                onClick={() => setStatusFilter(tab.id)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
                   statusFilter === tab.id
-                    ? "bg-indigo-600 text-white font-semibold"
+                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
                     : "text-slate-400 hover:bg-white/[0.05] hover:text-white"
                 }`}
               >
                 {tab.label}
               </button>
             ))}
-          </div>
 
-          <div className="flex items-center gap-2">
+            {/* Type Dropdown */}
             <select
               value={typeFilter}
               onChange={(e) => setTypeFilter(e.target.value)}
-              className="rounded-xl border border-white/[0.08] bg-[#14141e] px-3 py-2 text-xs text-slate-300 outline-none"
+              className="rounded-lg border border-white/[0.09] bg-[#14141e] px-3 py-1.5 text-xs text-white outline-none focus:border-indigo-500"
             >
               <option value="all">Semua Tipe Masalah</option>
-              <option value="broken_scraper">Scraper Error</option>
+              <option value="scraper_error">Error Scraper</option>
               <option value="broken_chapter">Chapter Rusak</option>
-              <option value="app_bug">Bug Aplikasi</option>
-              <option value="feedback">Feedback User</option>
+              <option value="bug">Bug Aplikasi</option>
+              <option value="feedback">Saran &amp; Masukan</option>
             </select>
+          </div>
 
-            <div className="relative w-full sm:w-64">
-              <MagnifyingGlass size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
-              <input
-                type="search"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Cari komik, ekstensi, pesan..."
-                className="w-full rounded-xl border border-white/[0.08] bg-[#14141e] py-2 pl-9 pr-3 text-xs text-white outline-none placeholder:text-slate-500 focus:border-indigo-500 transition"
-              />
-            </div>
+          <div className="relative w-full lg:max-w-xs">
+            <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Cari judul, ekstensi, komik..."
+              className="w-full rounded-xl border border-white/[0.09] bg-[#14141e] py-2 pl-9 pr-3 text-xs text-white outline-none placeholder:text-slate-500 focus:border-indigo-500"
+            />
           </div>
         </div>
 
-        {/* LIST / TABLE */}
+        {/* REPORTS TABLE */}
         {loading ? (
-          <div className="rounded-2xl border border-white/[0.07] bg-[#1c1c28] py-16 text-center text-sm text-slate-400">
+          <div className="rounded-2xl border border-white/[0.08] bg-[#1c1c28] py-16 text-center text-slate-400 text-sm">
             Memuat daftar laporan...
           </div>
         ) : filteredReports.length === 0 ? (
-          <div className="rounded-2xl border border-white/[0.07] bg-[#1c1c28] py-16 text-center text-sm text-slate-400">
-            {reports.length ? "Tidak ada tiket yang cocok dengan kriteria filter." : "Belum ada laporan atau tiket error masuk."}
+          <div className="rounded-2xl border border-white/[0.08] bg-[#1c1c28] py-16 text-center text-slate-400 text-sm">
+            Tidak ada laporan masalah yang cocok dengan filter.
           </div>
         ) : (
-          <div className="space-y-3">
-            {filteredReports.map((report) => {
-              const status = statusBadge(report.status);
-              const type = typeBadge(report.type);
-              return (
-                <div
-                  key={report.id}
-                  className="rounded-2xl border border-white/[0.07] bg-[#1c1c28] p-5 transition hover:border-indigo-500/30"
-                >
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-semibold ${type.cls}`}>
-                        {type.label}
-                      </span>
-                      <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold ${status.cls}`}>
-                        <status.icon size={12} />
-                        {status.label}
-                      </span>
-                      {report.extensionId && (
-                        <span className="rounded bg-white/[0.05] px-2 py-0.5 text-[10px] font-mono text-indigo-300">
-                          ext: {report.extensionId}
-                        </span>
-                      )}
-                    </div>
-                    <span className="text-xs text-slate-500 font-mono">
-                      {new Date(report.createdAt).toLocaleString("id-ID")}
-                    </span>
-                  </div>
+          <div className="overflow-hidden rounded-2xl border border-white/[0.08] bg-[#1c1c28]">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[900px] text-left">
+                <thead className="border-b border-white/[0.07] bg-white/[0.02] text-xs uppercase tracking-wide text-slate-400">
+                  <tr>
+                    <th className="px-5 py-4">Tipe &amp; Masalah</th>
+                    <th className="px-5 py-4">Target Ekstensi / Komik</th>
+                    <th className="px-5 py-4">Pelapor</th>
+                    <th className="px-5 py-4">Status</th>
+                    <th className="px-5 py-4">Waktu</th>
+                    <th className="px-5 py-4 text-right">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/[0.06] text-xs">
+                  {filteredReports.map((report) => (
+                    <tr key={report.id} className="transition hover:bg-white/[0.02]">
+                      <td className="px-5 py-4">
+                        <div className="flex items-center gap-2 mb-1">
+                          {getTypeBadge(report.type)}
+                        </div>
+                        <p className="font-semibold text-white text-sm truncate max-w-sm">{report.title}</p>
+                        <p className="mt-0.5 line-clamp-1 text-slate-400 max-w-sm">{report.description}</p>
+                      </td>
 
-                  {/* Body Content */}
-                  <div className="mt-3">
-                    {report.comicTitle && (
-                      <p className="text-sm font-semibold text-white">
-                        {report.comicTitle} {report.chapterNumber ? `• Chapter ${report.chapterNumber}` : ""}
-                      </p>
-                    )}
-                    <p className="mt-1 text-xs text-slate-300 leading-relaxed bg-[#14141e] p-3 rounded-xl border border-white/[0.04]">
-                      {report.message}
-                    </p>
-                  </div>
+                      <td className="px-5 py-4">
+                        {report.extensionName ? (
+                          <div className="flex items-center gap-1.5 text-indigo-300 font-medium">
+                            <Layers size={14} />
+                            <span>{report.extensionName}</span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-500">—</span>
+                        )}
+                        {report.comicId && (
+                          <p className="mt-0.5 text-slate-400 font-mono text-[11px] truncate max-w-[160px]">
+                            ID: {report.comicId}
+                          </p>
+                        )}
+                        {report.chapterTitle && (
+                          <p className="text-slate-500 text-[11px] truncate max-w-[160px]">
+                            {report.chapterTitle}
+                          </p>
+                        )}
+                      </td>
 
-                  {/* Footer & Actions */}
-                  <div className="mt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-white/[0.06] pt-3 text-xs">
-                    <div className="text-slate-400 text-[11px]">
-                      Pengirim: <strong>{report.userEmail || report.uid || "Anonim (Android)"}</strong> • App v{report.appVersion}
-                      {report.adminNotes && (
-                        <span className="block mt-1 text-emerald-300">
-                          Catatan Admin: {report.adminNotes}
-                        </span>
-                      )}
-                    </div>
+                      <td className="px-5 py-4">
+                        <p className="text-slate-300">{report.userEmail || "Anonim / Pengguna App"}</p>
+                        {report.deviceInfo && typeof report.deviceInfo.model === "string" && (
+                          <p className="mt-0.5 text-[11px] text-slate-500 flex items-center gap-1">
+                            <Smartphone size={11} />
+                            <span>{report.deviceInfo.model}</span>
+                          </p>
+                        )}
+                      </td>
 
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedReport(report);
-                          setAdminNotesDraft(report.adminNotes || "");
-                        }}
-                        className="rounded-lg border border-white/[0.09] bg-[#14141e] px-3 py-1.5 text-xs text-slate-300 hover:text-white hover:bg-white/[0.05] transition"
-                      >
-                        Detail &amp; Tanggapi
-                      </button>
+                      <td className="px-5 py-4">
+                        {getStatusBadge(report.status)}
+                      </td>
 
-                      {report.status !== "resolved" && (
-                        <button
-                          type="button"
-                          onClick={() => void updateReportStatus(report.id, "resolved")}
-                          className="rounded-lg bg-emerald-500/20 border border-emerald-500/30 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/30 transition"
-                        >
-                          Tandai Selesai
-                        </button>
-                      )}
+                      <td className="px-5 py-4 text-slate-400">
+                        {new Date(report.createdAt).toLocaleString("id-ID", {
+                          dateStyle: "short",
+                          timeStyle: "short",
+                        })}
+                      </td>
 
-                      <button
-                        type="button"
-                        onClick={() => void deleteReport(report.id)}
-                        className="rounded-lg border border-white/[0.08] p-1.5 text-slate-400 hover:text-rose-400 hover:border-rose-400/40 transition"
-                        title="Hapus laporan"
-                      >
-                        <Trash size={15} />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+                      <td className="px-5 py-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedReport(report)}
+                            className="rounded-lg border border-white/[0.08] p-1.5 text-slate-300 hover:bg-white/[0.05] hover:text-white"
+                            title="Lihat Detail Laporan"
+                          >
+                            <Eye size={15} />
+                          </button>
+
+                          {report.status !== "in_progress" && (
+                            <button
+                              type="button"
+                              disabled={busyId === report.id}
+                              onClick={() => updateReportStatus(report, "in_progress")}
+                              className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 p-1.5 text-indigo-300 hover:bg-indigo-500/20 disabled:opacity-50"
+                              title="Tandai Sedang Diperbaiki"
+                            >
+                              <Wrench size={15} />
+                            </button>
+                          )}
+
+                          {report.status !== "resolved" && (
+                            <button
+                              type="button"
+                              disabled={busyId === report.id}
+                              onClick={() => updateReportStatus(report, "resolved")}
+                              className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-1.5 text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+                              title="Tandai Selesai"
+                            >
+                              <CheckCircle2 size={15} />
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            disabled={busyId === report.id}
+                            onClick={() => deleteReport(report)}
+                            className="rounded-lg border border-white/[0.08] p-1.5 text-slate-400 hover:border-rose-500/40 hover:text-rose-300 disabled:opacity-50"
+                            title="Hapus Laporan Spam"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
-        {/* MODAL DETAIL & TANGGAPAN ADMIN */}
+        {/* DETAIL REPORT MODAL */}
         {selectedReport && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
-            <div className="w-full max-w-lg rounded-2xl border border-white/[0.09] bg-[#1c1c28] p-6 shadow-2xl">
-              <div className="flex items-start justify-between border-b border-white/[0.07] pb-4 mb-4">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" role="presentation">
+            <section
+              role="dialog"
+              aria-modal="true"
+              className="w-full max-w-xl rounded-3xl border border-white/[0.09] bg-[#1c1c28] p-6 shadow-2xl"
+            >
+              <div className="flex items-start justify-between border-b border-white/[0.08] pb-4">
                 <div>
-                  <h3 className="text-lg font-bold text-white">Tanggapi Laporan Tiket</h3>
-                  <p className="text-xs text-slate-400">ID: {selectedReport.id}</p>
+                  <div className="flex items-center gap-2 mb-1.5">
+                    {getTypeBadge(selectedReport.type)}
+                    {getStatusBadge(selectedReport.status)}
+                  </div>
+                  <h3 className="text-xl font-bold text-white">{selectedReport.title}</h3>
+                  <p className="mt-0.5 text-xs text-slate-400">ID Tiket: {selectedReport.id}</p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setSelectedReport(null)}
-                  className="rounded-lg p-1 text-slate-400 hover:text-white"
+                  className="rounded-lg p-2 text-slate-400 hover:bg-white/[0.06] hover:text-white"
                 >
                   <X size={18} />
                 </button>
               </div>
 
-              <div className="space-y-4 text-xs">
+              <div className="mt-5 space-y-4 text-xs">
                 <div>
-                  <span className="text-slate-400">Pesan Pengguna:</span>
-                  <p className="mt-1 rounded-xl bg-[#14141e] p-3 text-slate-200 border border-white/[0.05]">
-                    {selectedReport.message}
-                  </p>
-                </div>
-
-                <div>
-                  <label className="block text-slate-300 font-medium">Ubah Status</label>
-                  <div className="mt-1.5 flex gap-2">
-                    {(["pending", "in_progress", "resolved"] as const).map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => void updateReportStatus(selectedReport.id, s, adminNotesDraft)}
-                        disabled={updating}
-                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold capitalize border transition ${
-                          selectedReport.status === s
-                            ? "bg-indigo-600 border-indigo-500 text-white"
-                            : "border-white/[0.08] text-slate-400 hover:text-white"
-                        }`}
-                      >
-                        {s.replace("_", " ")}
-                      </button>
-                    ))}
+                  <h4 className="font-semibold text-slate-300">Deskripsi Masalah / Log</h4>
+                  <div className="mt-1.5 rounded-xl border border-white/[0.08] bg-[#14141e] p-3 text-slate-300 whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto">
+                    {selectedReport.description}
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-slate-300 font-medium">Catatan Admin (Solusi / Investigasi)</label>
-                  <textarea
-                    rows={3}
-                    value={adminNotesDraft}
-                    onChange={(e) => setAdminNotesDraft(e.target.value)}
-                    placeholder="Contoh: Link scraper sudah diperbaiki di commit v1.2.1."
-                    className="mt-1.5 w-full rounded-xl border border-white/[0.09] bg-[#14141e] p-3 text-white outline-none focus:border-indigo-500"
-                  />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl border border-white/[0.06] bg-[#14141e] p-3">
+                    <p className="text-slate-500">Ekstensi / Sumber Terkait</p>
+                    <p className="mt-0.5 font-semibold text-white">{selectedReport.extensionName || "Tidak spesifik"}</p>
+                    {selectedReport.comicId && (
+                      <p className="mt-1 font-mono text-[11px] text-indigo-300">Comic ID: {selectedReport.comicId}</p>
+                    )}
+                    {selectedReport.chapterTitle && (
+                      <p className="text-slate-400 text-[11px]">{selectedReport.chapterTitle}</p>
+                    )}
+                  </div>
+
+                  <div className="rounded-xl border border-white/[0.06] bg-[#14141e] p-3">
+                    <p className="text-slate-500">Pelapor / Perangkat</p>
+                    <p className="mt-0.5 font-semibold text-white">{selectedReport.userEmail || "Pengguna Aplikasi"}</p>
+                    {selectedReport.uid && (
+                      <p className="mt-1 font-mono text-[10px] text-slate-400 truncate">UID: {selectedReport.uid}</p>
+                    )}
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Waktu Lapor: {new Date(selectedReport.createdAt).toLocaleString("id-ID")}
+                    </p>
+                  </div>
                 </div>
               </div>
 
-              <div className="mt-6 flex justify-end gap-2 pt-2 border-t border-white/[0.07]">
+              <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.08] pt-4">
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => updateReportStatus(selectedReport, "in_progress")}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600/20 border border-indigo-500/30 px-3 py-1.5 text-xs font-semibold text-indigo-300 hover:bg-indigo-600/30"
+                  >
+                    <Wrench size={13} />
+                    <span>Set Sedang Diperbaiki</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateReportStatus(selectedReport, "resolved")}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600/20 border border-emerald-500/30 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-600/30"
+                  >
+                    <CheckCircle2 size={13} />
+                    <span>Set Selesai</span>
+                  </button>
+                </div>
+
                 <button
                   type="button"
                   onClick={() => setSelectedReport(null)}
-                  className="rounded-lg border border-white/[0.08] px-4 py-2 text-xs text-slate-300 hover:bg-white/[0.05]"
+                  className="rounded-xl border border-white/[0.08] px-4 py-1.5 text-xs text-slate-300 hover:bg-white/[0.05]"
                 >
                   Tutup
                 </button>
-                <button
-                  type="button"
-                  onClick={() => void updateReportStatus(selectedReport.id, selectedReport.status, adminNotesDraft)}
-                  disabled={updating}
-                  className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 transition disabled:opacity-50"
-                >
-                  {updating ? "Menyimpan..." : "Simpan Catatan"}
-                </button>
               </div>
-            </div>
+            </section>
           </div>
         )}
       </div>

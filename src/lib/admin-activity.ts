@@ -1,27 +1,44 @@
 import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
-export type AuditCategory = "security" | "extension" | "settings" | "user" | "system";
+export interface AuditLogEntry {
+  id?: string;
+  adminEmail: string;
+  action: string;
+  target: string;
+  details: string;
+  createdAt: string;
+  timestamp?: unknown;
+}
 
 export async function logAdminAction(
   adminEmail: string,
   action: string,
   target: string,
   details: string,
-  category: AuditCategory = "system"
+  category?: string
 ): Promise<void> {
+  const nowIso = new Date().toISOString();
   try {
     await addDoc(collection(db, "AUDIT_LOGS"), {
-      adminEmail: adminEmail || "admin@komryuu.core",
+      adminEmail: adminEmail || "admin@komryuu.x",
       action,
-      target,
-      details,
-      category,
-      createdAt: new Date().toISOString(),
+      target: target || "General",
+      details: details || "",
+      category: category || "general",
+      createdAt: nowIso,
       timestamp: serverTimestamp(),
     });
+
+    // Catat juga ke collection ACTIVITY untuk kompatibilitas riwayat lama
+    await addDoc(collection(db, "ACTIVITY"), {
+      action,
+      detail: target ? `[${target}] ${details}` : details,
+      userId: adminEmail || "admin",
+      createdAt: nowIso,
+    });
   } catch (err) {
-    console.error("Failed to write to AUDIT_LOGS:", err);
+    console.error("Gagal mencatat audit log admin:", err);
   }
 }
 
@@ -30,23 +47,15 @@ export async function recordAdminActivity(
   detail: string,
   userId?: string
 ): Promise<void> {
+  const nowIso = new Date().toISOString();
   try {
     await addDoc(collection(db, "ACTIVITY"), {
       action,
       detail,
       ...(userId ? { userId } : {}),
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
     });
-
-    // Otomatis sinkronkan ke AUDIT_LOGS
-    await logAdminAction(
-      "admin@komryuu.core",
-      action,
-      userId ? `User: ${userId}` : "System",
-      detail,
-      userId ? "user" : "system"
-    );
   } catch (err) {
-    console.error("Failed to record admin activity:", err);
+    console.error("Gagal mencatat aktivitas admin:", err);
   }
 }

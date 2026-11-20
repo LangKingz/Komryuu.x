@@ -1,138 +1,83 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { collection, onSnapshot, Timestamp } from "firebase/firestore";
+import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import {
+  Activity,
+  Calendar,
+  CheckCircle2,
   Clock,
-  DownloadSimple,
-  Funnel,
-  Key,
-  Lightning,
-  MagnifyingGlass,
+  Download,
+  FileText,
+  Filter,
+  History,
+  Layers,
+  Search,
   Shield,
-  ShieldWarning,
-  Sliders,
-  Terminal,
-  User,
-} from "@phosphor-icons/react";
+  ShieldAlert,
+  UserCheck,
+  Users,
+} from "lucide-react";
 
-export type AuditLogItem = {
+export interface AuditLogItem {
   id: string;
   adminEmail: string;
   action: string;
   target: string;
   details: string;
-  category: "security" | "extension" | "settings" | "user" | "system";
   createdAt: string;
-  timestamp?: unknown;
-};
-
-type CategoryFilter = "all" | "security" | "extension" | "settings" | "user" | "system";
-
-function parseDate(value: unknown): Date | null {
-  if (value instanceof Timestamp) return value.toDate();
-  if (value instanceof Date) return value;
-  if (typeof value === "string" || typeof value === "number") {
-    const d = new Date(value);
-    return Number.isNaN(d.getTime()) ? null : d;
-  }
-  return null;
-}
-
-function relativeTime(value: unknown): string {
-  const date = parseDate(value);
-  if (!date) return "Baru saja";
-
-  const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
-  if (seconds < 60) return "Baru saja";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} menit lalu`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} jam lalu`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days} hari lalu`;
-  return date.toLocaleDateString("id-ID", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function categoryBadge(category: string) {
-  switch (category) {
-    case "security":
-      return {
-        label: "Keamanan",
-        cls: "bg-rose-500/10 text-rose-300 border-rose-500/20",
-        icon: ShieldWarning,
-      };
-    case "extension":
-      return {
-        label: "Ekstensi",
-        cls: "bg-violet-500/10 text-violet-300 border-violet-500/20",
-        icon: Lightning,
-      };
-    case "settings":
-      return {
-        label: "Pengaturan",
-        cls: "bg-amber-500/10 text-amber-300 border-amber-500/20",
-        icon: Sliders,
-      };
-    case "user":
-      return {
-        label: "Pengguna",
-        cls: "bg-sky-500/10 text-sky-300 border-sky-500/20",
-        icon: User,
-      };
-    default:
-      return {
-        label: "Sistem",
-        cls: "bg-slate-700/60 text-slate-300 border-white/5",
-        icon: Terminal,
-      };
-  }
 }
 
 export default function AuditLogPages() {
   const [logs, setLogs] = useState<AuditLogItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [actionCategory, setActionCategory] = useState<string>("all");
+  const [timeRange, setTimeRange] = useState<string>("all");
   const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
 
   useEffect(() => {
+    const q = query(collection(db, "AUDIT_LOGS"), orderBy("createdAt", "desc"));
     const unsub = onSnapshot(
-      collection(db, "AUDIT_LOGS"),
+      q,
       (snapshot) => {
-        const items: AuditLogItem[] = [];
-        snapshot.forEach((d) => {
-          const data = d.data();
-          items.push({
-            id: d.id,
-            adminEmail: typeof data.adminEmail === "string" ? data.adminEmail : "admin@komryuu.core",
-            action: typeof data.action === "string" ? data.action : "Aktivitas Admin",
-            target: typeof data.target === "string" ? data.target : "Sistem",
-            details: typeof data.details === "string" ? data.details : "",
-            category: (data.category as AuditLogItem["category"]) || "system",
-            createdAt: typeof data.createdAt === "string" ? data.createdAt : new Date().toISOString(),
-            timestamp: data.timestamp,
+        if (!snapshot.empty) {
+          const items: AuditLogItem[] = snapshot.docs.map((docSnap) => {
+            const d = docSnap.data();
+            return {
+              id: docSnap.id,
+              adminEmail: d.adminEmail || "admin@komryuu.x",
+              action: d.action || "Aksi Sistem",
+              target: d.target || "General",
+              details: d.details || "",
+              createdAt: d.createdAt || new Date().toISOString(),
+            };
           });
-        });
-
-        // Urutkan dari yang terbaru ke terlama
-        items.sort((a, b) => {
-          const timeA = parseDate(a.timestamp || a.createdAt)?.getTime() || 0;
-          const timeB = parseDate(b.timestamp || b.createdAt)?.getTime() || 0;
-          return timeB - timeA;
-        });
-
-        setLogs(items);
+          setLogs(items);
+        } else {
+          // Fallback membaca collection ACTIVITY jika AUDIT_LOGS belum terisi banyak
+          const unsubFallback = onSnapshot(
+            collection(db, "ACTIVITY"),
+            (fallbackSnap) => {
+              const fItems: AuditLogItem[] = fallbackSnap.docs.map((docSnap) => {
+                const d = docSnap.data();
+                return {
+                  id: docSnap.id,
+                  adminEmail: d.userId || "admin",
+                  action: d.action || "Aktivitas",
+                  target: "System",
+                  details: d.detail || "",
+                  createdAt: d.createdAt || new Date().toISOString(),
+                };
+              });
+              setLogs(fItems);
+            }
+          );
+        }
         setLoading(false);
       },
       (err) => {
-        console.error("Error loading AUDIT_LOGS:", err);
+        console.error("Error reading audit logs:", err);
         setLoading(false);
       }
     );
@@ -140,191 +85,277 @@ export default function AuditLogPages() {
     return () => unsub();
   }, []);
 
+  const now = Date.now();
+
+  const metrics = useMemo(() => {
+    const todayLogs = logs.filter((l) => {
+      const d = new Date(l.createdAt).getTime();
+      return !isNaN(d) && now - d < 24 * 60 * 60 * 1000;
+    }).length;
+
+    const uniqueAdmins = new Set(logs.map((l) => l.adminEmail)).size;
+
+    return {
+      total: logs.length,
+      today: todayLogs,
+      admins: uniqueAdmins || 1,
+    };
+  }, [logs, now]);
+
   const filteredLogs = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return logs.filter((log) => {
+    const s = search.trim().toLowerCase();
+    return logs.filter((item) => {
       const matchSearch =
-        !term ||
-        log.action.toLowerCase().includes(term) ||
-        log.target.toLowerCase().includes(term) ||
-        log.details.toLowerCase().includes(term) ||
-        log.adminEmail.toLowerCase().includes(term);
+        !s ||
+        item.adminEmail.toLowerCase().includes(s) ||
+        item.action.toLowerCase().includes(s) ||
+        item.target.toLowerCase().includes(s) ||
+        item.details.toLowerCase().includes(s);
 
-      const matchCat = categoryFilter === "all" || log.category === categoryFilter;
-      return matchSearch && matchCat;
+      let matchCategory = true;
+      if (actionCategory !== "all") {
+        const a = item.action.toLowerCase();
+        if (actionCategory === "user") {
+          matchCategory = a.includes("pengguna") || a.includes("user") || a.includes("ban") || a.includes("role");
+        } else if (actionCategory === "extension") {
+          matchCategory = a.includes("ekstensi") || a.includes("extension");
+        } else if (actionCategory === "settings") {
+          matchCategory = a.includes("pengaturan") || a.includes("setting") || a.includes("api key") || a.includes("maintenance");
+        } else if (actionCategory === "report") {
+          matchCategory = a.includes("laporan") || a.includes("tiket");
+        }
+      }
+
+      let matchTime = true;
+      if (timeRange !== "all") {
+        const t = new Date(item.createdAt).getTime();
+        if (!isNaN(t)) {
+          if (timeRange === "24h") {
+            matchTime = now - t < 24 * 60 * 60 * 1000;
+          } else if (timeRange === "7d") {
+            matchTime = now - t < 7 * 24 * 60 * 60 * 1000;
+          }
+        }
+      }
+
+      return matchSearch && matchCategory && matchTime;
     });
-  }, [logs, search, categoryFilter]);
+  }, [logs, search, actionCategory, timeRange, now]);
 
-  // Hitung metrik
-  const securityCount = logs.filter((l) => l.category === "security").length;
-  const settingsCount = logs.filter((l) => l.category === "settings").length;
-  const extensionCount = logs.filter((l) => l.category === "extension").length;
-
-  function exportAuditLogs() {
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(logs, null, 2));
-    const dlAnchor = document.createElement("a");
-    dlAnchor.setAttribute("href", dataStr);
-    dlAnchor.setAttribute("download", `komryuu-audit-logs-${new Date().toISOString().split("T")[0]}.json`);
-    dlAnchor.click();
+  function exportLogs() {
+    const jsonStr = JSON.stringify(filteredLogs, null, 2);
+    const blob = new Blob([jsonStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `audit-logs-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
-  const filterTabs: Array<{ id: CategoryFilter; label: string }> = [
-    { id: "all", label: "Semua Kategori" },
-    { id: "security", label: "Keamanan" },
-    { id: "user", label: "Pengguna" },
-    { id: "extension", label: "Ekstensi" },
-    { id: "settings", label: "Pengaturan" },
-    { id: "system", label: "Sistem" },
-  ];
+  function getActionBadge(action: string) {
+    const a = action.toLowerCase();
+    if (a.includes("ban") || a.includes("hapus") || a.includes("delete")) {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-[11px] font-semibold text-rose-300">
+          <ShieldAlert size={12} />
+          {action}
+        </span>
+      );
+    }
+    if (a.includes("role") || a.includes("hak akses")) {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full border border-purple-500/30 bg-purple-500/10 px-2 py-0.5 text-[11px] font-semibold text-purple-300">
+          <UserCheck size={12} />
+          {action}
+        </span>
+      );
+    }
+    if (a.includes("ekstensi")) {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full border border-indigo-500/30 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-semibold text-indigo-300">
+          <Layers size={12} />
+          {action}
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[11px] font-semibold text-sky-300">
+        <Activity size={12} />
+        {action}
+      </span>
+    );
+  }
 
   return (
     <section className="min-h-full bg-[#14141e] p-4 text-white md:p-8">
       <div className="mx-auto max-w-7xl">
-        {/* HEADER */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-7">
+        <header className="mb-7 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
-            <p className="text-sm font-medium uppercase tracking-[0.2em] text-sky-400">Security & Governance</p>
-            <h1 className="mt-2 text-3xl font-semibold">Audit Logs Aktivitas</h1>
-            <p className="mt-1 text-sm text-slate-400">
-              Riwayat lengkap setiap tindakan perubahan konfigurasi, ekstensi, dan keamanan oleh admin.
+            <p className="text-sm font-medium uppercase tracking-[0.2em] text-indigo-400">Akuntabilitas &amp; Keamanan</p>
+            <h1 className="mt-2 text-3xl font-semibold">Audit Log Aktivitas Admin</h1>
+            <p className="mt-2 text-sm text-slate-400">
+              Riwayat kronologis seluruh tindakan modifikasi data, blokir user, dan perubahan konfigurasi sistem.
             </p>
           </div>
 
           <button
             type="button"
-            onClick={exportAuditLogs}
-            disabled={logs.length === 0}
-            className="inline-flex items-center gap-2 rounded-xl border border-white/[0.08] bg-[#1c1c28] px-4 py-2.5 text-xs font-semibold text-slate-200 hover:bg-[#232332] hover:text-white transition disabled:opacity-50"
+            onClick={exportLogs}
+            disabled={filteredLogs.length === 0}
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-[#1c1c28] px-4 py-2.5 text-xs font-semibold text-slate-200 hover:bg-white/[0.05] disabled:opacity-50 transition"
           >
-            <DownloadSimple size={16} />
-            <span>Export Audit Log (JSON)</span>
+            <Download size={15} />
+            <span>Export Log JSON</span>
           </button>
-        </div>
+        </header>
 
-        {/* METRICS */}
-        <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <article className="rounded-2xl border border-white/[0.07] bg-[#1c1c28] p-5">
-            <p className="text-xs text-slate-400">Total Aktivitas Tercatat</p>
-            <p className="mt-2 text-3xl font-bold text-white">{loading ? "—" : logs.length}</p>
-            <p className="mt-1 text-xs text-slate-500">Koleksi AUDIT_LOGS</p>
-          </article>
-          <article className="rounded-2xl border border-white/[0.07] bg-[#1c1c28] p-5">
-            <p className="text-xs text-slate-400">Tindakan Keamanan (Ban/Role)</p>
-            <p className="mt-2 text-3xl font-bold text-rose-300">{loading ? "—" : securityCount}</p>
-            <p className="mt-1 text-xs text-slate-500">Operasi proteksi akun</p>
-          </article>
-          <article className="rounded-2xl border border-white/[0.07] bg-[#1c1c28] p-5">
-            <p className="text-xs text-slate-400">Perubahan Pengaturan</p>
-            <p className="mt-2 text-3xl font-bold text-amber-300">{loading ? "—" : settingsCount}</p>
-            <p className="mt-1 text-xs text-slate-500">API Key, Banner &amp; Maintenance</p>
-          </article>
-          <article className="rounded-2xl border border-white/[0.07] bg-[#1c1c28] p-5">
-            <p className="text-xs text-slate-400">Modifikasi Ekstensi</p>
-            <p className="mt-2 text-3xl font-bold text-violet-300">{loading ? "—" : extensionCount}</p>
-            <p className="mt-1 text-xs text-slate-500">Tambah / Edit scraper</p>
-          </article>
+        {/* METRICS CARDS */}
+        <div className="mb-6 grid gap-4 sm:grid-cols-3">
+          <div className="rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-medium text-slate-400">Total Aktivitas Tercatat</p>
+                <p className="mt-2 text-3xl font-bold text-white">{metrics.total}</p>
+              </div>
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-400">
+                <History size={22} />
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-medium text-slate-400">Aktivitas Hari Ini (24 Jam)</p>
+                <p className="mt-2 text-3xl font-bold text-emerald-300">{metrics.today}</p>
+              </div>
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400">
+                <Clock size={22} />
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-medium text-slate-400">Admin Terlibat</p>
+                <p className="mt-2 text-3xl font-bold text-purple-300">{metrics.admins}</p>
+              </div>
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-purple-500/10 text-purple-400">
+                <Shield size={22} />
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* FILTERS & SEARCH */}
-        <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-white/[0.07] bg-[#1c1c28] p-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-wrap gap-1">
-            {filterTabs.map((tab) => (
+        <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Category Tabs */}
+            {[
+              { id: "all", label: "Semua Kategori" },
+              { id: "user", label: "Pengguna & Role" },
+              { id: "extension", label: "Ekstensi" },
+              { id: "settings", label: "Pengaturan & API" },
+              { id: "report", label: "Laporan & Tiket" },
+            ].map((tab) => (
               <button
                 key={tab.id}
                 type="button"
-                onClick={() => setCategoryFilter(tab.id)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-                  categoryFilter === tab.id
-                    ? "bg-indigo-600 text-white font-semibold"
+                onClick={() => setActionCategory(tab.id)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                  actionCategory === tab.id
+                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
                     : "text-slate-400 hover:bg-white/[0.05] hover:text-white"
                 }`}
               >
                 {tab.label}
               </button>
             ))}
+
+            <select
+              value={timeRange}
+              onChange={(e) => setTimeRange(e.target.value)}
+              className="rounded-lg border border-white/[0.09] bg-[#14141e] px-3 py-1.5 text-xs text-white outline-none focus:border-indigo-500"
+            >
+              <option value="all">Semua Waktu</option>
+              <option value="24h">24 Jam Terakhir</option>
+              <option value="7d">7 Hari Terakhir</option>
+            </select>
           </div>
 
-          <div className="relative w-full lg:max-w-sm">
-            <MagnifyingGlass size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
+          <div className="relative w-full lg:max-w-xs">
+            <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
             <input
               type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Cari aksi, admin, atau detail..."
-              className="w-full rounded-xl border border-white/[0.08] bg-[#14141e] py-2 pl-9 pr-3 text-xs text-white outline-none placeholder:text-slate-500 focus:border-indigo-500 transition"
+              placeholder="Cari email admin, aksi, target..."
+              className="w-full rounded-xl border border-white/[0.09] bg-[#14141e] py-2 pl-9 pr-3 text-xs text-white outline-none placeholder:text-slate-500 focus:border-indigo-500"
             />
           </div>
         </div>
 
-        {/* TABLE */}
+        {/* LOGS TABLE */}
         {loading ? (
-          <div className="rounded-2xl border border-white/[0.07] bg-[#1c1c28] py-16 text-center text-sm text-slate-400">
-            Memuat riwayat log...
+          <div className="rounded-2xl border border-white/[0.08] bg-[#1c1c28] py-16 text-center text-slate-400 text-sm">
+            Memuat audit log aktivitas...
           </div>
         ) : filteredLogs.length === 0 ? (
-          <div className="rounded-2xl border border-white/[0.07] bg-[#1c1c28] py-16 text-center text-sm text-slate-400">
-            {logs.length ? "Tidak ada aktivitas yang sesuai dengan filter." : "Belum ada aktivitas admin tercatat."}
+          <div className="rounded-2xl border border-white/[0.08] bg-[#1c1c28] py-16 text-center text-slate-400 text-sm">
+            Tidak ada riwayat aktivitas yang sesuai filter.
           </div>
         ) : (
-          <div className="overflow-hidden rounded-2xl border border-white/[0.07] bg-[#1c1c28]">
+          <div className="overflow-hidden rounded-2xl border border-white/[0.08] bg-[#1c1c28]">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[950px] text-left">
+              <table className="w-full min-w-[850px] text-left">
                 <thead className="border-b border-white/[0.07] bg-white/[0.02] text-xs uppercase tracking-wide text-slate-400">
                   <tr>
-                    <th className="px-5 py-4">Waktu</th>
+                    <th className="px-5 py-4">Waktu &amp; Tanggal</th>
                     <th className="px-5 py-4">Admin Pelaksana</th>
-                    <th className="px-5 py-4">Kategori &amp; Aksi</th>
-                    <th className="px-5 py-4">Target Operasi</th>
-                    <th className="px-5 py-4">Rincian Perubahan</th>
+                    <th className="px-5 py-4">Aksi</th>
+                    <th className="px-5 py-4">Target Objek</th>
+                    <th className="px-5 py-4">Keterangan / Rincian</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/[0.06] text-xs">
-                  {filteredLogs.map((log) => {
-                    const badge = categoryBadge(log.category);
-                    return (
-                      <tr key={log.id} className="transition hover:bg-white/[0.02]">
-                        {/* Waktu */}
-                        <td className="px-5 py-4 whitespace-nowrap text-slate-400 font-mono">
-                          <span title={new Date(log.createdAt).toLocaleString("id-ID")}>
-                            {relativeTime(log.timestamp || log.createdAt)}
-                          </span>
-                        </td>
+                  {filteredLogs.map((log) => (
+                    <tr key={log.id} className="transition hover:bg-white/[0.02]">
+                      <td className="px-5 py-4 text-slate-400 whitespace-nowrap">
+                        <p className="font-mono text-slate-200">
+                          {new Date(log.createdAt).toLocaleTimeString("id-ID", {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            second: "2-digit",
+                          })}
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          {new Date(log.createdAt).toLocaleDateString("id-ID", {
+                            day: "numeric",
+                            month: "short",
+                            year: "numeric",
+                          })}
+                        </p>
+                      </td>
 
-                        {/* Admin Pelaksana */}
-                        <td className="px-5 py-4">
-                          <div className="flex items-center gap-2">
-                            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-300 font-bold text-[10px]">
-                              A
-                            </div>
-                            <span className="font-medium text-slate-200">{log.adminEmail}</span>
-                          </div>
-                        </td>
+                      <td className="px-5 py-4">
+                        <span className="font-medium text-white">{log.adminEmail}</span>
+                      </td>
 
-                        {/* Kategori & Aksi */}
-                        <td className="px-5 py-4">
-                          <div className="flex items-center gap-2">
-                            <span
-                              className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${badge.cls}`}
-                            >
-                              <badge.icon size={11} />
-                              {badge.label}
-                            </span>
-                            <span className="font-semibold text-white">{log.action}</span>
-                          </div>
-                        </td>
+                      <td className="px-5 py-4">
+                        {getActionBadge(log.action)}
+                      </td>
 
-                        {/* Target Operasi */}
-                        <td className="px-5 py-4 text-slate-300 font-medium">
-                          {log.target}
-                        </td>
+                      <td className="px-5 py-4 font-medium text-indigo-300">
+                        {log.target || "General"}
+                      </td>
 
-                        {/* Rincian */}
-                        <td className="px-5 py-4 max-w-xs text-slate-400 truncate">
-                          {log.details || "-"}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                      <td className="px-5 py-4 text-slate-300 max-w-md">
+                        <p className="line-clamp-2">{log.details}</p>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
