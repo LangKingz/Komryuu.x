@@ -1,16 +1,23 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { onAuthStateChanged, User } from "firebase/auth";
+import { doc, onSnapshot } from "firebase/firestore";
+import { auth, db } from "@/lib/firebase";
 import {
   ArrowRight,
+  Crown,
   Download,
   Layers,
+  LogIn,
   Menu,
   Server,
+  Shield,
   Sparkles,
   Terminal,
+  User as UserIcon,
   X,
   Zap,
 } from "lucide-react";
@@ -18,8 +25,68 @@ import {
 const Mainbar = () => {
   const pathname = usePathname();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [userRole, setUserRole] = useState<string>("user");
+  const [userName, setUserName] = useState<string>("");
+  const [userPhoto, setUserPhoto] = useState<string>("");
+  const [canAccessAdmin, setCanAccessAdmin] = useState<boolean>(false);
+  const [authLoading, setAuthLoading] = useState<boolean>(true);
 
   // Jangan render navbar jika berada di dalam dashboard admin
+  useEffect(() => {
+    let unsubSnapshot: (() => void) | null = null;
+
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        setCurrentUser(null);
+        setUserRole("user");
+        setUserName("");
+        setUserPhoto("");
+        setCanAccessAdmin(false);
+        setAuthLoading(false);
+        if (unsubSnapshot) {
+          unsubSnapshot();
+          unsubSnapshot = null;
+        }
+        return;
+      }
+
+      setCurrentUser(user);
+      setUserName(user.displayName || user.email?.split("@")[0] || "User");
+      setUserPhoto(user.photoURL || "");
+
+      // Listen dokumen user di Firestore
+      unsubSnapshot = onSnapshot(doc(db, "USERS", user.uid), (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          const role = typeof data.role === "string" ? data.role.toLowerCase() : "user";
+          const perms = (data.permissions && typeof data.permissions === "object")
+            ? (data.permissions as Record<string, unknown>)
+            : {};
+          const hasAdminAccess =
+            role === "admin" ||
+            role === "moderator" ||
+            perms.canAccessAdminPanel === true;
+
+          setUserRole(role);
+          setCanAccessAdmin(hasAdminAccess);
+          if (typeof data.name === "string" && data.name) {
+            setUserName(data.name);
+          }
+          if (typeof data.photoUrl === "string" && data.photoUrl) {
+            setUserPhoto(data.photoUrl);
+          }
+        }
+        setAuthLoading(false);
+      });
+    });
+
+    return () => {
+      unsubAuth();
+      if (unsubSnapshot) unsubSnapshot();
+    };
+  }, []);
+
   if (pathname && (pathname.startsWith("/dashboard") || pathname.startsWith("/(admin)"))) {
     return null;
   }
@@ -72,25 +139,90 @@ const Mainbar = () => {
           ))}
         </nav>
 
-        {/* RIGHT ACTION: CTA DASHBOARD */}
+        {/* RIGHT ACTION: DYNAMIC SESUAI STATUS LOGIN */}
         <div className="hidden items-center gap-3 md:flex">
-          <Link
-            href="/dashboard"
-            className="group inline-flex items-center gap-2 rounded-xl border border-indigo-500/30 bg-gradient-to-r from-indigo-600/90 to-violet-600/90 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-indigo-600/20 transition-all hover:border-indigo-400/50 hover:from-indigo-600 hover:to-violet-600 hover:shadow-indigo-500/30"
-          >
-            <span>Masuk Dashboard</span>
-            <ArrowRight size={15} className="transition-transform group-hover:translate-x-0.5" />
-          </Link>
+          {!authLoading && (
+            <>
+              {currentUser ? (
+                canAccessAdmin ? (
+                  // 1. LOGIN SEBAGAI ADMIN / MODERATOR
+                  <div className="flex items-center gap-2.5">
+                    <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/30 bg-rose-500/10 px-2.5 py-0.5 text-[11px] font-bold text-rose-300 tracking-wider">
+                      <Shield size={12} />
+                      {userRole.toUpperCase()}
+                    </span>
+                    <Link
+                      href="/dashboard"
+                      className="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-indigo-600/25 transition-all hover:from-indigo-500 hover:to-violet-500"
+                    >
+                      <span>Buka Dashboard</span>
+                      <ArrowRight size={15} className="transition-transform group-hover:translate-x-0.5" />
+                    </Link>
+                  </div>
+                ) : (
+                  // 2. LOGIN SEBAGAI USER BIASA / VIP (SEMBUNYIKAN TOMBOL DASHBOARD)
+                  <Link
+                    href="/profile"
+                    className="flex items-center gap-2.5 rounded-xl border border-white/[0.08] bg-[#1c1c28] px-3.5 py-1.5 text-xs text-white hover:border-indigo-500/40 hover:bg-[#232332] transition"
+                  >
+                    {userPhoto ? (
+                      <img
+                        src={userPhoto}
+                        alt=""
+                        className="h-7 w-7 rounded-full object-cover border border-indigo-400/30"
+                      />
+                    ) : (
+                      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-indigo-600/30 text-indigo-300">
+                        <UserIcon size={14} />
+                      </div>
+                    )}
+                    <div className="text-left">
+                      <p className="font-semibold text-white leading-tight max-w-[110px] truncate">{userName}</p>
+                      <p className="text-[10px] text-indigo-300 capitalize">{userRole === "vip" ? "VIP Member" : "Akun Saya"}</p>
+                    </div>
+                  </Link>
+                )
+              ) : (
+                // 3. BELUM LOGIN
+                <Link
+                  href="/login"
+                  className="group inline-flex items-center gap-2 rounded-xl border border-indigo-500/30 bg-gradient-to-r from-indigo-600/90 to-violet-600/90 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-indigo-600/20 transition-all hover:border-indigo-400/50 hover:from-indigo-600 hover:to-violet-600"
+                >
+                  <LogIn size={15} />
+                  <span>Masuk / Login</span>
+                </Link>
+              )}
+            </>
+          )}
         </div>
 
         {/* MOBILE MENU TOGGLE BUTTON */}
         <div className="flex items-center gap-2 md:hidden">
-          <Link
-            href="/dashboard"
-            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white"
-          >
-            Dashboard
-          </Link>
+          {currentUser ? (
+            canAccessAdmin ? (
+              <Link
+                href="/dashboard"
+                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white"
+              >
+                Dashboard
+              </Link>
+            ) : (
+              <Link
+                href="/profile"
+                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white"
+              >
+                Akun Saya
+              </Link>
+            )
+          ) : (
+            <Link
+              href="/login"
+              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white"
+            >
+              Login
+            </Link>
+          )}
+
           <button
             type="button"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -128,14 +260,36 @@ const Mainbar = () => {
           </div>
 
           <div className="mt-4 pt-4 border-t border-white/[0.08]">
-            <Link
-              href="/dashboard"
-              onClick={() => setMobileMenuOpen(false)}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 py-2.5 text-sm font-semibold text-white shadow-lg"
-            >
-              <span>Buka Admin Dashboard</span>
-              <ArrowRight size={16} />
-            </Link>
+            {currentUser ? (
+              canAccessAdmin ? (
+                <Link
+                  href="/dashboard"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 py-2.5 text-sm font-semibold text-white shadow-lg"
+                >
+                  <Shield size={16} />
+                  <span>Buka Admin Dashboard</span>
+                </Link>
+              ) : (
+                <Link
+                  href="/profile"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#1c1c28] border border-indigo-500/30 py-2.5 text-sm font-semibold text-white shadow-lg"
+                >
+                  <UserIcon size={16} />
+                  <span>Lihat Profil Pengguna</span>
+                </Link>
+              )
+            ) : (
+              <Link
+                href="/login"
+                onClick={() => setMobileMenuOpen(false)}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 py-2.5 text-sm font-semibold text-white shadow-lg"
+              >
+                <LogIn size={16} />
+                <span>Masuk ke Akun</span>
+              </Link>
+            )}
           </div>
         </div>
       )}

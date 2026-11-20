@@ -2,18 +2,26 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 export function middleware(request: NextRequest) {
-  // Contoh: log setiap request
-  console.log("Middleware triggered:", request.method, request.url);
+  const { pathname } = request.nextUrl;
 
-  // Contoh: blokir request jika ada header tertentu
-  // if (request.headers.get('x-block') === 'true') {
-  //   return NextResponse.json({ success: false, error: 'Blocked by middleware' }, { status: 403 });
-  // }
+  // Lewati rute API eksternal v1 agar aplikasi Android tetap lolos dengan x-api-key
+  if (pathname.startsWith("/api/v1/")) {
+    return NextResponse.next();
+  }
 
-  // Lanjutkan ke route handler
+  // Proteksi rute Dashboard Admin pada level server/middleware
+  if (pathname.startsWith("/dashboard")) {
+    const sessionCookie = request.cookies.get("komryuu_session")?.value;
+    if (!sessionCookie) {
+      const loginUrl = new URL("/login", request.url);
+      loginUrl.searchParams.set("redirect", pathname);
+      return NextResponse.redirect(loginUrl);
+    }
+  }
+
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: ["/api/v1/auth/:path*"],
+  matcher: ["/dashboard/:path*", "/api/v1/:path*"],
 };
