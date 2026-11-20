@@ -14,7 +14,14 @@ type AuthorizationResult =
 type RateWindow = {
   startedAt: number;
   count: number;
+
 };
+
+const windowsKeren = () => {
+  console.log("drago;n")
+  return "jagoan";
+
+}
 
 const rateWindows = new Map<string, RateWindow>();
 let cachedSettings: { expiresAt: number; value: AppSettings } | null = null;
@@ -65,7 +72,8 @@ function checkRateLimit(request: Request, keyHash: string, limit: number): boole
 }
 
 export async function authorizeExternalApiRequest(
-  request: Request
+  request: Request,
+  options?: { allowMaintenance?: boolean }
 ): Promise<AuthorizationResult> {
   let settings: AppSettings;
   try {
@@ -124,7 +132,7 @@ export async function authorizeExternalApiRequest(
     };
   }
 
-  if (settings.maintenanceMode) {
+  if (!options?.allowMaintenance && settings.maintenanceMode) {
     return {
       authorized: false,
       response: NextResponse.json(

@@ -1,14 +1,28 @@
 "use client";
 
 import { collection, doc, getDocs, onSnapshot, setDoc, Timestamp } from "firebase/firestore";
-import { ArrowCounterClockwise, Check, Copy, DownloadSimple, Key } from "@phosphor-icons/react";
+import {
+  ArrowCounterClockwise,
+  Check,
+  Copy,
+  Devices,
+  DownloadSimple,
+  Key,
+  Megaphone,
+  ShieldWarning,
+  Warning,
+} from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { db } from "@/lib/firebase";
 import { recordAdminActivity } from "@/lib/admin-activity";
 import {
   DEFAULT_APP_SETTINGS,
+  DEFAULT_APP_UPDATE,
+  DEFAULT_BROADCAST_BANNER,
   normalizeAppSettings,
   type AppSettings,
+  type AppUpdate,
+  type BroadcastBanner,
 } from "@/model/app-settings";
 
 type Toast = { kind: "success" | "error"; message: string };
@@ -49,7 +63,7 @@ export default function SettingPages() {
     const unsubscribe = onSnapshot(
       doc(db, "SETTINGS", "app_config"),
       (snapshot) => {
-        const nextSettings = normalizeAppSettings(snapshot.exists() ? snapshot.data() : {});
+        const nextSettings = normalizeAppSettings(snapshot.exists() ? (snapshot.data() as Record<string, unknown>) : {});
         settingsRef.current = nextSettings;
         setSettings(nextSettings);
         setRateLimitDraft(String(nextSettings.rateLimitPerMinute));
@@ -75,9 +89,9 @@ export default function SettingPages() {
     return () => window.clearTimeout(timeout);
   }, [toast]);
 
-  async function savePatch(patch: Partial<AppSettings>) {
+  async function savePatch(patch: Record<string, unknown>) {
     const previous = settingsRef.current;
-    const next = { ...previous, ...patch };
+    const next = { ...previous, ...patch } as AppSettings;
     settingsRef.current = next;
     setSettings(next);
     setSaving(true);
@@ -100,6 +114,24 @@ export default function SettingPages() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function updateBroadcastBanner(patch: Partial<BroadcastBanner>) {
+    const currentBanner = settingsRef.current.broadcastBanner || DEFAULT_BROADCAST_BANNER;
+    const updatedBanner: BroadcastBanner = { ...currentBanner, ...patch };
+    const next = { ...settingsRef.current, broadcastBanner: updatedBanner };
+    settingsRef.current = next;
+    setSettings(next);
+    return updatedBanner;
+  }
+
+  function updateAppUpdate(patch: Partial<AppUpdate>) {
+    const currentUpdate = settingsRef.current.appUpdate || DEFAULT_APP_UPDATE;
+    const updatedUpdate: AppUpdate = { ...currentUpdate, ...patch };
+    const next = { ...settingsRef.current, appUpdate: updatedUpdate };
+    settingsRef.current = next;
+    setSettings(next);
+    return updatedUpdate;
   }
 
   function saveNumberSetting(field: "rateLimitPerMinute" | "extensionCacheTtlSeconds", value: string) {
@@ -167,11 +199,11 @@ export default function SettingPages() {
         collections: {
           EXTENSION: extensionSnapshot.docs.map((item) => ({
             id: item.id,
-            ...serializeValue(item.data()) as Record<string, unknown>,
+            ...(serializeValue(item.data()) as Record<string, unknown>),
           })),
           SETTINGS: settingsSnapshot.docs.map((item) => ({
             id: item.id,
-            ...serializeValue(item.data()) as Record<string, unknown>,
+            ...(serializeValue(item.data()) as Record<string, unknown>),
           })),
         },
       };
@@ -217,16 +249,17 @@ export default function SettingPages() {
     }
   }
 
-  const settingCard = "rounded-2xl border border-slate-800 bg-slate-900/70 p-5 md:p-6";
-  const inputClass = "mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white outline-none focus:border-sky-500";
+  const settingCard = "rounded-2xl border border-white/[0.07] bg-[#1c1c28] p-5 md:p-6";
+  const toggleCard = "flex items-center justify-between gap-4 rounded-xl border border-white/[0.07] bg-[#14141e] p-4";
+  const inputClass = "mt-1.5 w-full rounded-lg border border-white/[0.09] bg-[#14141e] px-3.5 py-2.5 text-sm text-white outline-none placeholder:text-slate-600 focus:border-sky-500 transition";
 
   return (
-    <section className="min-h-full bg-slate-950 p-4 text-white md:p-8">
+    <section className="min-h-full bg-[#14141e] p-4 text-white md:p-8">
       <div className="mx-auto max-w-5xl">
         <header className="mb-7">
           <p className="text-sm font-medium uppercase tracking-[0.2em] text-sky-400">Konfigurasi</p>
           <h1 className="mt-2 text-3xl font-semibold">Pengaturan Global</h1>
-          <p className="mt-2 text-sm text-slate-400">Perubahan disimpan langsung ke SETTINGS/app_config.</p>
+          <p className="mt-2 text-sm text-slate-400">Perubahan disimpan langsung ke dokumen SETTINGS/app_config Firestore.</p>
         </header>
 
         {toast && (
@@ -246,72 +279,286 @@ export default function SettingPages() {
         {loading ? (
           <div className={settingCard + " py-16 text-center text-slate-300"}>Memuat pengaturan...</div>
         ) : (
-          <div className="space-y-5">
+          <div className="space-y-6">
+            {/* 1. SECTION: PENGUMUMAN & BROADCAST APLIKASI */}
             <section className={settingCard}>
-              <div className="mb-5">
-                <h2 className="text-lg font-semibold">Status sistem</h2>
-                <p className="mt-1 text-sm text-slate-400">Maintenance dan pengumuman dikirim ke API aplikasi.</p>
-              </div>
-              <label className="flex items-center justify-between gap-4 rounded-xl border border-slate-800 bg-slate-950/70 p-4">
-                <span>
-                  <span className="block font-medium">Maintenance Mode</span>
-                  <span className="mt-1 block text-xs text-slate-400">API eksternal akan mengembalikan HTTP 503 saat aktif.</span>
+              <div className="mb-5 flex items-start gap-3">
+                <span className="rounded-xl bg-amber-400/10 p-2.5 text-amber-300">
+                  <Megaphone size={22} weight="duotone" />
                 </span>
-                <input
-                  type="checkbox"
-                  checked={settings.maintenanceMode}
-                  disabled={saving}
-                  onChange={(event) => void savePatch({ maintenanceMode: event.target.checked })}
-                  className="h-5 w-5 accent-sky-500"
-                  aria-label="Maintenance Mode"
-                />
-              </label>
-              <label className="mt-4 block text-sm text-slate-300">
-                Pesan maintenance
-                <textarea
-                  rows={2}
-                  value={settings.maintenanceMessage}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    const next = { ...settingsRef.current, maintenanceMessage: value };
-                    settingsRef.current = next;
-                    setSettings(next);
-                  }}
-                  onBlur={() => void savePatch({ maintenanceMessage: settingsRef.current.maintenanceMessage.trim() })}
-                  className={inputClass}
-                />
-              </label>
-              <label className="mt-4 block text-sm text-slate-300">
-                Pesan pengumuman / broadcast
-                <textarea
-                  rows={3}
-                  value={settings.announcement}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    const next = { ...settingsRef.current, announcement: value };
-                    settingsRef.current = next;
-                    setSettings(next);
-                  }}
-                  onBlur={() => void savePatch({ announcement: settingsRef.current.announcement.trim() })}
-                  className={inputClass}
-                />
-                <span className="mt-1 block text-xs text-slate-500">Tersimpan otomatis setelah kolom selesai diedit.</span>
-              </label>
+                <div>
+                  <h2 className="text-lg font-semibold">Pengumuman & Broadcast Aplikasi</h2>
+                  <p className="mt-0.5 text-sm text-slate-400">
+                    Kirim pengumuman penting atau banner darurat langsung ke aplikasi Android user.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <label className={toggleCard}>
+                  <div>
+                    <span className="block font-medium">Aktifkan Banner Pengumuman</span>
+                    <span className="mt-0.5 block text-xs text-slate-400">
+                      Tampilkan bar pengumuman melayang di halaman utama aplikasi.
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.broadcastBanner?.isActive ?? false}
+                    disabled={saving}
+                    onChange={(event) => {
+                      const updated = updateBroadcastBanner({ isActive: event.target.checked });
+                      void savePatch({ broadcastBanner: updated });
+                    }}
+                    className="h-5 w-5 accent-amber-400 cursor-pointer"
+                    aria-label="Aktifkan Banner Pengumuman"
+                  />
+                </label>
+
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="sm:col-span-2">
+                    <label className="block text-sm text-slate-300">
+                      Judul Pengumuman
+                      <input
+                        value={settings.broadcastBanner?.title ?? ""}
+                        placeholder="Contoh: Pemeliharaan Server / Rilis Fitur Baru"
+                        onChange={(event) => updateBroadcastBanner({ title: event.target.value })}
+                        onBlur={() => {
+                          const banner = settingsRef.current.broadcastBanner;
+                          void savePatch({ broadcastBanner: banner });
+                        }}
+                        className={inputClass}
+                      />
+                    </label>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-slate-300">
+                      Tipe Alert
+                      <select
+                        value={settings.broadcastBanner?.type ?? "info"}
+                        disabled={saving}
+                        onChange={(event) => {
+                          const updated = updateBroadcastBanner({ type: event.target.value });
+                          void savePatch({ broadcastBanner: updated });
+                        }}
+                        className={inputClass}
+                      >
+                        <option value="info">Info (Biru/Abu)</option>
+                        <option value="warning">Warning (Kuning/Oranye)</option>
+                        <option value="urgent">Urgent (Merah/Kritis)</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+
+                <label className="block text-sm text-slate-300">
+                  Pesan Pengumuman
+                  <textarea
+                    rows={3}
+                    value={settings.broadcastBanner?.message ?? ""}
+                    placeholder="Tulis pesan siaran yang akan dibaca oleh semua pengguna aplikasi..."
+                    onChange={(event) => {
+                      const msg = event.target.value;
+                      updateBroadcastBanner({ message: msg });
+                    }}
+                    onBlur={() => {
+                      const banner = settingsRef.current.broadcastBanner;
+                      void savePatch({
+                        broadcastBanner: banner,
+                        announcement: banner?.message || "",
+                      });
+                    }}
+                    className={inputClass}
+                  />
+                  <span className="mt-1 block text-xs text-slate-500">
+                    Tersimpan otomatis setelah cursor meninggalkan kotak teks.
+                  </span>
+                </label>
+              </div>
             </section>
 
+            {/* 2. SECTION: KONTROL VERSI & FORCE UPDATE APK */}
             <section className={settingCard}>
-              <div className="mb-5">
-                <h2 className="text-lg font-semibold">Akses API eksternal</h2>
-                <p className="mt-1 text-sm text-slate-400">API key mentah hanya ditampilkan setelah dibuat dan tidak disimpan di Firestore.</p>
+              <div className="mb-5 flex items-start gap-3">
+                <span className="rounded-xl bg-sky-400/10 p-2.5 text-sky-300">
+                  <Devices size={22} weight="duotone" />
+                </span>
+                <div>
+                  <h2 className="text-lg font-semibold">Kontrol Versi & Force Update APK</h2>
+                  <p className="mt-0.5 text-sm text-slate-400">
+                    Atur versi minimum yang diizinkan dan paksa pengguna mengupdate aplikasi ke versi terbaru.
+                  </p>
+                </div>
               </div>
+
+              <div className="space-y-4">
+                <label className={toggleCard}>
+                  <div>
+                    <span className="block font-medium">Wajibkan Force Update</span>
+                    <span className="mt-0.5 block text-xs text-slate-400">
+                      Jika aktif, aplikasi Android di bawah Minimum App Version akan diblokir dengan dialog update wajib.
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.appUpdate?.forceUpdate ?? false}
+                    disabled={saving}
+                    onChange={(event) => {
+                      const updated = updateAppUpdate({ forceUpdate: event.target.checked });
+                      void savePatch({ appUpdate: updated });
+                    }}
+                    className="h-5 w-5 accent-sky-400 cursor-pointer"
+                    aria-label="Wajibkan Force Update"
+                  />
+                </label>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="block text-sm text-slate-300">
+                    Minimum App Version
+                    <input
+                      value={settings.appUpdate?.minAppVersion ?? settings.minimumAppVersion}
+                      maxLength={32}
+                      placeholder="1.0.0"
+                      onChange={(event) => {
+                        const val = event.target.value;
+                        updateAppUpdate({ minAppVersion: val });
+                      }}
+                      onBlur={() => {
+                        const val = (settingsRef.current.appUpdate?.minAppVersion || "1.0.0").trim();
+                        void savePatch({
+                          minimumAppVersion: val,
+                          appUpdate: updateAppUpdate({ minAppVersion: val }),
+                        });
+                      }}
+                      className={inputClass}
+                    />
+                    <span className="mt-1 block text-xs text-slate-500">Versi terendah yang masih boleh mengakses API.</span>
+                  </label>
+
+                  <label className="block text-sm text-slate-300">
+                    Latest App Version
+                    <input
+                      value={settings.appUpdate?.latestAppVersion ?? "1.0.0"}
+                      maxLength={32}
+                      placeholder="1.1.0"
+                      onChange={(event) => updateAppUpdate({ latestAppVersion: event.target.value })}
+                      onBlur={() => {
+                        const val = (settingsRef.current.appUpdate?.latestAppVersion || "1.0.0").trim();
+                        void savePatch({ appUpdate: updateAppUpdate({ latestAppVersion: val }) });
+                      }}
+                      className={inputClass}
+                    />
+                    <span className="mt-1 block text-xs text-slate-500">Versi terbaru yang tersedia di server/distribusi.</span>
+                  </label>
+                </div>
+
+                <label className="block text-sm text-slate-300">
+                  URL Download APK Terbaru
+                  <input
+                    type="url"
+                    value={settings.appUpdate?.downloadUrl ?? ""}
+                    placeholder="https://github.com/.../releases/download/v1.1.0/app-release.apk"
+                    onChange={(event) => updateAppUpdate({ downloadUrl: event.target.value })}
+                    onBlur={() => {
+                      const url = (settingsRef.current.appUpdate?.downloadUrl || "").trim();
+                      void savePatch({ appUpdate: updateAppUpdate({ downloadUrl: url }) });
+                    }}
+                    className={inputClass}
+                  />
+                  <span className="mt-1 block text-xs text-slate-500">Link langsung saat user menekan tombol &quot;Update Sekarang&quot;.</span>
+                </label>
+
+                <label className="block text-sm text-slate-300">
+                  Catatan Pembaruan (Changelog)
+                  <textarea
+                    rows={3}
+                    value={settings.appUpdate?.changelog ?? ""}
+                    placeholder="- Penambahan fitur sinkronisasi cloud&#10;- Perbaikan bug saat membaca manga&#10;- Peningkatan performa"
+                    onChange={(event) => updateAppUpdate({ changelog: event.target.value })}
+                    onBlur={() => {
+                      const cl = (settingsRef.current.appUpdate?.changelog || "").trim();
+                      void savePatch({ appUpdate: updateAppUpdate({ changelog: cl }) });
+                    }}
+                    className={inputClass}
+                  />
+                </label>
+              </div>
+            </section>
+
+            {/* 3. SECTION: STATUS SISTEM & MAINTENANCE */}
+            <section className={settingCard}>
+              <div className="mb-5 flex items-start gap-3">
+                <span className="rounded-xl bg-rose-400/10 p-2.5 text-rose-300">
+                  <ShieldWarning size={22} weight="duotone" />
+                </span>
+                <div>
+                  <h2 className="text-lg font-semibold">Status Sistem & Pemeliharaan</h2>
+                  <p className="mt-0.5 text-sm text-slate-400">Kontrol downtime aplikasi untuk maintenance terjadwal.</p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <label className={toggleCard}>
+                  <div>
+                    <span className="block font-medium">Maintenance Mode</span>
+                    <span className="mt-0.5 block text-xs text-slate-400">
+                      API eksternal akan mengembalikan HTTP 503 dengan pesan pemeliharaan.
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.maintenanceMode}
+                    disabled={saving}
+                    onChange={(event) => void savePatch({ maintenanceMode: event.target.checked })}
+                    className="h-5 w-5 accent-rose-500 cursor-pointer"
+                    aria-label="Maintenance Mode"
+                  />
+                </label>
+
+                <label className="block text-sm text-slate-300">
+                  Pesan Pemeliharaan (Maintenance Message)
+                  <textarea
+                    rows={2}
+                    value={settings.maintenanceMessage}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      const next = { ...settingsRef.current, maintenanceMessage: value };
+                      settingsRef.current = next;
+                      setSettings(next);
+                    }}
+                    onBlur={() => void savePatch({ maintenanceMessage: settingsRef.current.maintenanceMessage.trim() })}
+                    className={inputClass}
+                  />
+                </label>
+              </div>
+            </section>
+
+            {/* 4. SECTION: AKSES API EKSTERNAL */}
+            <section className={settingCard}>
+              <div className="mb-5 flex items-start gap-3">
+                <span className="rounded-xl bg-violet-400/10 p-2.5 text-violet-300">
+                  <Key size={22} weight="duotone" />
+                </span>
+                <div>
+                  <h2 className="text-lg font-semibold">Akses API Eksternal</h2>
+                  <p className="mt-0.5 text-sm text-slate-400">
+                    Otorisasi request dari aplikasi Android via header <code className="text-sky-300">x-api-key</code>.
+                  </p>
+                </div>
+              </div>
+
               <div className="flex flex-col gap-3 sm:flex-row">
                 <div className="relative min-w-0 flex-1">
-                  <Key size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                  <Key size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
                   <input
                     readOnly
                     value={generatedKey}
-                    placeholder={settings.externalApiKeyHash ? "Key tersimpan (hash). Rotasi untuk membuat key baru." : "Belum ada API key"}
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 py-2.5 pl-10 pr-3 font-mono text-xs text-slate-200 outline-none"
+                    placeholder={
+                      settings.externalApiKeyHash
+                        ? "Key tersimpan (hash SHA-256). Rotasi untuk membuat key baru."
+                        : "Belum ada API key terdaftar"
+                    }
+                    className="w-full rounded-lg border border-white/[0.09] bg-[#14141e] py-2.5 pl-10 pr-3 font-mono text-xs text-slate-200 outline-none"
                     aria-label="External API Key"
                   />
                 </div>
@@ -319,26 +566,29 @@ export default function SettingPages() {
                   <button
                     type="button"
                     onClick={() => void copyApiKey()}
-                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-700 px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-800"
+                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/[0.09] bg-[#14141e] px-4 py-2.5 text-sm text-slate-200 hover:bg-white/[0.05]"
                   >
                     <Copy size={17} />
-                    Copy
+                    Salin
                   </button>
                 )}
                 <button
                   type="button"
                   onClick={() => void generateApiKey()}
                   disabled={generatingKey || saving}
-                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-sky-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-sky-400 disabled:opacity-50"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-sky-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-sky-400 disabled:opacity-50 transition"
                 >
                   <Key size={17} />
-                  {generatingKey ? "Membuat..." : "Generate / rotate"}
+                  {generatingKey ? "Membuat..." : "Generate / Rotate Key"}
                 </button>
               </div>
-              <p className="mt-3 text-xs text-slate-500">Aplikasi eksternal mengirim key melalui header x-api-key. Salin key baru sebelum meninggalkan halaman.</p>
+              <p className="mt-3 text-xs text-slate-500">
+                Nilai mentah API key hanya ditampilkan satu kali setelah digenerate dan disimpan sebagai SHA-256 hash di database.
+              </p>
+
               <div className="mt-5 grid gap-4 sm:grid-cols-2">
                 <label className="block text-sm text-slate-300">
-                  Rate limit (request/menit)
+                  Rate Limit (request/menit)
                   <input
                     type="number"
                     min={1}
@@ -350,7 +600,7 @@ export default function SettingPages() {
                   />
                 </label>
                 <label className="block text-sm text-slate-300">
-                  Cache TTL ekstensi (detik)
+                  Cache TTL Ekstensi (detik)
                   <input
                     type="number"
                     min={0}
@@ -364,44 +614,52 @@ export default function SettingPages() {
               </div>
             </section>
 
+            {/* 5. SECTION: KONTEN DAN PREFERENSI */}
             <section className={settingCard}>
-              <div className="mb-5">
-                <h2 className="text-lg font-semibold">Konten dan aplikasi</h2>
-                <p className="mt-1 text-sm text-slate-400">Preferensi global untuk aplikasi client.</p>
+              <div className="mb-5 flex items-start gap-3">
+                <span className="rounded-xl bg-emerald-400/10 p-2.5 text-emerald-300">
+                  <Warning size={22} weight="duotone" />
+                </span>
+                <div>
+                  <h2 className="text-lg font-semibold">Konten & Kebijakan Aplikasi</h2>
+                  <p className="mt-0.5 text-sm text-slate-400">Preferensi global pembatasan fitur dan registrasi.</p>
+                </div>
               </div>
+
               <div className="space-y-3">
-                <label className="flex items-center justify-between gap-4 rounded-xl border border-slate-800 bg-slate-950/70 p-4">
-                  <span>
-                    <span className="block font-medium">Izinkan registrasi pengguna baru</span>
-                    <span className="mt-1 block text-xs text-slate-400">Mengontrol endpoint registrasi aplikasi.</span>
-                  </span>
+                <label className={toggleCard}>
+                  <div>
+                    <span className="block font-medium">Izinkan Registrasi Pengguna Baru</span>
+                    <span className="mt-0.5 block text-xs text-slate-400">Kontrol endpoint registrasi akun aplikasi.</span>
+                  </div>
                   <input
                     type="checkbox"
                     checked={settings.allowRegistration}
                     disabled={saving}
                     onChange={(event) => void savePatch({ allowRegistration: event.target.checked })}
-                    className="h-5 w-5 accent-sky-500"
+                    className="h-5 w-5 accent-emerald-500 cursor-pointer"
                     aria-label="Izinkan registrasi pengguna baru"
                   />
                 </label>
-                <label className="flex items-center justify-between gap-4 rounded-xl border border-slate-800 bg-slate-950/70 p-4">
-                  <span>
-                    <span className="block font-medium">Tampilkan konten NSFW / 18+</span>
-                    <span className="mt-1 block text-xs text-slate-400">Default nonaktif untuk API eksternal.</span>
-                  </span>
+                <label className={toggleCard}>
+                  <div>
+                    <span className="block font-medium">Tampilkan Konten Dewasa / NSFW 18+</span>
+                    <span className="mt-0.5 block text-xs text-slate-400">Default global filter untuk API eksternal.</span>
+                  </div>
                   <input
                     type="checkbox"
                     checked={settings.showNsfw}
                     disabled={saving}
                     onChange={(event) => void savePatch({ showNsfw: event.target.checked })}
-                    className="h-5 w-5 accent-sky-500"
+                    className="h-5 w-5 accent-emerald-500 cursor-pointer"
                     aria-label="Tampilkan konten NSFW"
                   />
                 </label>
               </div>
-              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+
+              <div className="mt-4">
                 <label className="block text-sm text-slate-300">
-                  Kategori default
+                  Kategori Default
                   <select
                     value={settings.defaultCategory}
                     disabled={saving}
@@ -418,37 +676,22 @@ export default function SettingPages() {
                     <option value="cinema">Cinema</option>
                   </select>
                 </label>
-                <label className="block text-sm text-slate-300">
-                  Minimum App Version
-                  <input
-                    value={settings.minimumAppVersion}
-                    maxLength={32}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      const next = { ...settingsRef.current, minimumAppVersion: value };
-                      settingsRef.current = next;
-                      setSettings(next);
-                    }}
-                    onBlur={() => void savePatch({ minimumAppVersion: settingsRef.current.minimumAppVersion.trim() })}
-                    className={inputClass}
-                    placeholder="1.0.0"
-                  />
-                </label>
               </div>
             </section>
 
-            <section className="rounded-2xl border border-rose-500/30 bg-rose-950/20 p-5 md:p-6">
+            {/* 6. SECTION: UTILITAS DATABASE & DANGER ZONE */}
+            <section className="rounded-2xl border border-rose-500/20 bg-rose-950/10 p-5 md:p-6">
               <div className="mb-5">
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-300">Danger zone</p>
-                <h2 className="mt-2 text-lg font-semibold">Utilitas database</h2>
-                <p className="mt-1 text-sm text-slate-400">Backup hanya mencakup koleksi EXTENSION dan SETTINGS.</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-300">Danger Zone</p>
+                <h2 className="mt-1 text-lg font-semibold">Utilitas & Backup Database</h2>
+                <p className="mt-0.5 text-sm text-slate-400">Backup mencakup koleksi EXTENSION dan SETTINGS.</p>
               </div>
               <div className="flex flex-col gap-3 sm:flex-row">
                 <button
                   type="button"
                   onClick={() => void exportBackup()}
                   disabled={saving}
-                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-700 px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/[0.09] bg-[#14141e] px-4 py-2.5 text-sm text-slate-200 hover:bg-white/[0.05] disabled:opacity-50 transition"
                 >
                   <DownloadSimple size={18} />
                   {saving ? "Memproses..." : "Export Backup Data (JSON)"}
@@ -457,10 +700,10 @@ export default function SettingPages() {
                   type="button"
                   onClick={() => setResetConfirmationOpen(true)}
                   disabled={saving}
-                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-rose-400/40 px-4 py-2.5 text-sm text-rose-200 hover:bg-rose-400/10 disabled:opacity-50"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-rose-400/40 px-4 py-2.5 text-sm text-rose-200 hover:bg-rose-400/10 disabled:opacity-50 transition"
                 >
                   <ArrowCounterClockwise size={18} />
-                  Reset pengaturan ke default
+                  Reset Pengaturan ke Default
                 </button>
               </div>
             </section>
@@ -476,7 +719,7 @@ export default function SettingPages() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="reset-dialog-title"
-            className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl"
+            className="w-full max-w-md rounded-2xl border border-white/[0.09] bg-[#1b1b28] p-6 shadow-2xl"
           >
             <h2 id="reset-dialog-title" className="text-xl font-semibold">Reset semua pengaturan?</h2>
             <p className="mt-2 text-sm text-slate-400">
@@ -487,7 +730,7 @@ export default function SettingPages() {
                 type="button"
                 onClick={() => setResetConfirmationOpen(false)}
                 disabled={saving}
-                className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800"
+                className="rounded-lg border border-white/[0.09] px-4 py-2 text-sm text-slate-300 hover:bg-white/[0.05]"
               >
                 Batal
               </button>

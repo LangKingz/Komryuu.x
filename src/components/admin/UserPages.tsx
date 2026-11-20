@@ -4,16 +4,26 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   onSnapshot,
   serverTimestamp,
   Timestamp,
   updateDoc,
 } from "firebase/firestore";
 import {
+  BookOpen,
+  ClockCounterClockwise,
   Copy,
+  Crown,
   Devices,
+  Eye,
+  MagnifyingGlass,
+  PencilSimple,
+  ShieldCheck,
   ShieldWarning,
+  Sparkle,
   Trash,
+  User,
   UserCircle,
   UserMinus,
   UserPlus,
@@ -23,8 +33,75 @@ import { useEffect, useMemo, useState } from "react";
 import { db } from "@/lib/firebase";
 import { recordAdminActivity } from "@/lib/admin-activity";
 
-type FilterType = "all" | "active" | "banned" | "admin";
-type ModalType = "ban" | "delete" | "role" | "reason" | null;
+export type UserRole = "admin" | "moderator" | "vip" | "user";
+
+export type UserPermissions = {
+  canAccessAdminPanel: boolean;
+  canManageExtensions: boolean;
+  canBanUsers: boolean;
+  bypassRateLimit: boolean;
+  canAccessNsfw: boolean;
+};
+
+export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, UserPermissions> = {
+  admin: {
+    canAccessAdminPanel: true,
+    canManageExtensions: true,
+    canBanUsers: true,
+    bypassRateLimit: true,
+    canAccessNsfw: true,
+  },
+  moderator: {
+    canAccessAdminPanel: true,
+    canManageExtensions: true,
+    canBanUsers: true,
+    bypassRateLimit: false,
+    canAccessNsfw: true,
+  },
+  vip: {
+    canAccessAdminPanel: false,
+    canManageExtensions: false,
+    canBanUsers: false,
+    bypassRateLimit: true,
+    canAccessNsfw: true,
+  },
+  user: {
+    canAccessAdminPanel: false,
+    canManageExtensions: false,
+    canBanUsers: false,
+    bypassRateLimit: false,
+    canAccessNsfw: false,
+  },
+};
+
+type FilterType = "all" | "active" | "banned" | "admin" | "moderator" | "vip" | "user";
+type ModalType = "ban" | "delete" | "role" | "reason" | "sync" | null;
+
+export type ComicBookmark = {
+  comicId: string;
+  title: string;
+  coverUrl: string;
+  sourceName: string;
+  status: string;
+  updatedAt: string | number;
+};
+
+export type ReadingHistory = {
+  comicId: string;
+  title: string;
+  coverUrl: string;
+  sourceName: string;
+  lastChapterNumber: string | number;
+  lastChapterTitle: string;
+  lastPage: number;
+  updatedAt: string | number;
+};
+
+export type UserSyncBackup = {
+  library: ComicBookmark[];
+  history: ReadingHistory[];
+  lastSyncedAt: string | null;
+};
 
 type UserRecord = {
   id: string;
@@ -33,7 +110,8 @@ type UserRecord = {
   email: string;
   photoUrl: string;
   provider: string;
-  role: "user" | "admin";
+  role: UserRole;
+  permissions: UserPermissions;
   isBanned: boolean;
   banReason: string;
   bannedAt: unknown;
@@ -42,6 +120,9 @@ type UserRecord = {
     appVersion: string;
     deviceModel: string;
   };
+  libraryCount?: number;
+  historyCount?: number;
+  lastSyncedAt?: unknown;
   createdAt: unknown;
   lastLoginAt: unknown;
 };
@@ -72,6 +153,40 @@ function toUser(id: string, data: Record<string, unknown>): UserRecord {
     data.deviceInfo && typeof data.deviceInfo === "object"
       ? (data.deviceInfo as Record<string, unknown>)
       : {};
+  const rawRole = toText(data.role).toLowerCase();
+  const role: UserRole =
+    rawRole === "admin" || rawRole === "moderator" || rawRole === "vip"
+      ? (rawRole as UserRole)
+      : "user";
+
+  const rawPerms =
+    data.permissions && typeof data.permissions === "object"
+      ? (data.permissions as Record<string, unknown>)
+      : {};
+  const defaultPerms = ROLE_DEFAULT_PERMISSIONS[role];
+  const permissions: UserPermissions = {
+    canAccessAdminPanel:
+      typeof rawPerms.canAccessAdminPanel === "boolean"
+        ? rawPerms.canAccessAdminPanel
+        : defaultPerms.canAccessAdminPanel,
+    canManageExtensions:
+      typeof rawPerms.canManageExtensions === "boolean"
+        ? rawPerms.canManageExtensions
+        : defaultPerms.canManageExtensions,
+    canBanUsers:
+      typeof rawPerms.canBanUsers === "boolean"
+        ? rawPerms.canBanUsers
+        : defaultPerms.canBanUsers,
+    bypassRateLimit:
+      typeof rawPerms.bypassRateLimit === "boolean"
+        ? rawPerms.bypassRateLimit
+        : defaultPerms.bypassRateLimit,
+    canAccessNsfw:
+      typeof rawPerms.canAccessNsfw === "boolean"
+        ? rawPerms.canAccessNsfw
+        : defaultPerms.canAccessNsfw,
+  };
+
   return {
     id,
     uid: toText(data.uid) || id,
@@ -79,7 +194,8 @@ function toUser(id: string, data: Record<string, unknown>): UserRecord {
     email: toText(data.email),
     photoUrl: toText(data.photoUrl),
     provider: toText(data.provider).toLowerCase() || "guest",
-    role: data.role === "admin" ? "admin" : "user",
+    role,
+    permissions,
     isBanned: data.isBanned === true,
     banReason: toText(data.banReason),
     bannedAt: data.bannedAt,
@@ -88,6 +204,9 @@ function toUser(id: string, data: Record<string, unknown>): UserRecord {
       appVersion: toText(device.appVersion),
       deviceModel: toText(device.deviceModel),
     },
+    libraryCount: typeof data.libraryCount === "number" ? data.libraryCount : undefined,
+    historyCount: typeof data.historyCount === "number" ? data.historyCount : undefined,
+    lastSyncedAt: data.lastSyncedAt,
     createdAt: data.createdAt,
     lastLoginAt: data.lastLoginAt,
   };
@@ -95,7 +214,7 @@ function toUser(id: string, data: Record<string, unknown>): UserRecord {
 
 function relativeTime(value: unknown): string {
   const date = parseDate(value);
-  if (!date) return "Belum pernah login";
+  if (!date) return "Belum ada aktivitas";
 
   const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
   if (seconds < 60) return "Baru saja";
@@ -114,6 +233,32 @@ function relativeTime(value: unknown): string {
   });
 }
 
+function roleBadgeClass(role: UserRole): string {
+  switch (role) {
+    case "admin":
+      return "border border-rose-400/30 bg-rose-400/10 text-rose-300";
+    case "moderator":
+      return "border border-amber-400/30 bg-amber-400/10 text-amber-300";
+    case "vip":
+      return "border border-purple-400/30 bg-purple-400/10 text-purple-300";
+    default:
+      return "border border-white/[0.08] bg-slate-800 text-slate-300";
+  }
+}
+
+function roleLabel(role: UserRole): string {
+  switch (role) {
+    case "admin":
+      return "Admin";
+    case "moderator":
+      return "Moderator";
+    case "vip":
+      return "VIP Member";
+    default:
+      return "User Standar";
+  }
+}
+
 export default function UserPages() {
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -125,8 +270,15 @@ export default function UserPages() {
   const [selected, setSelected] = useState<UserRecord | null>(null);
   const [banReason, setBanReason] = useState("");
   const [customReason, setCustomReason] = useState("");
-  const [targetRole, setTargetRole] = useState<"user" | "admin">("user");
+  const [targetRole, setTargetRole] = useState<UserRole>("user");
+  const [targetPermissions, setTargetPermissions] = useState<UserPermissions>(ROLE_DEFAULT_PERMISSIONS.user);
   const [busy, setBusy] = useState(false);
+
+  // State untuk modal sinkronisasi user
+  const [syncData, setSyncData] = useState<UserSyncBackup | null>(null);
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [syncTab, setSyncTab] = useState<"library" | "history">("library");
+  const [syncSearch, setSyncSearch] = useState("");
 
   useEffect(() => {
     return onSnapshot(
@@ -173,7 +325,10 @@ export default function UserPages() {
         filter === "all" ||
         (filter === "active" && !user.isBanned) ||
         (filter === "banned" && user.isBanned) ||
-        (filter === "admin" && user.role === "admin");
+        (filter === "admin" && user.role === "admin") ||
+        (filter === "moderator" && user.role === "moderator") ||
+        (filter === "vip" && user.role === "vip") ||
+        (filter === "user" && user.role === "user");
       return matchesSearch && matchesFilter;
     });
   }, [users, search, filter]);
@@ -192,12 +347,43 @@ export default function UserPages() {
     setBanReason("");
     setCustomReason("");
     setTargetRole(user.role);
+    setTargetPermissions({ ...user.permissions });
+
+    if (type === "sync") {
+      setSyncLoading(true);
+      setSyncData(null);
+      setSyncTab("library");
+      setSyncSearch("");
+      void loadUserSyncData(user.id);
+    }
+  }
+
+  async function loadUserSyncData(uid: string) {
+    try {
+      const backupSnap = await getDoc(doc(db, "USERS", uid, "sync_data", "backup"));
+      if (backupSnap.exists()) {
+        const raw = backupSnap.data() as Record<string, unknown>;
+        setSyncData({
+          library: Array.isArray(raw.library) ? (raw.library as ComicBookmark[]) : [],
+          history: Array.isArray(raw.history) ? (raw.history as ReadingHistory[]) : [],
+          lastSyncedAt: typeof raw.lastSyncedAt === "string" ? raw.lastSyncedAt : null,
+        });
+      } else {
+        setSyncData({ library: [], history: [], lastSyncedAt: null });
+      }
+    } catch (err) {
+      console.error("Load sync data failed", err);
+      setToast({ kind: "error", message: "Gagal memuat data koleksi dan riwayat user." });
+    } finally {
+      setSyncLoading(false);
+    }
   }
 
   function closeModal() {
     if (busy) return;
     setModal(null);
     setSelected(null);
+    setSyncData(null);
   }
 
   async function copyUid(uid: string) {
@@ -256,18 +442,38 @@ export default function UserPages() {
     }
   }
 
-  async function changeRole() {
+  function handleRoleChange(newRole: UserRole) {
+    setTargetRole(newRole);
+    // Otomatis terapkan preset permissions default untuk role tersebut
+    setTargetPermissions({ ...ROLE_DEFAULT_PERMISSIONS[newRole] });
+  }
+
+  function togglePermission(key: keyof UserPermissions) {
+    setTargetPermissions((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  }
+
+  async function saveRoleAndPermissions() {
     if (!selected) return;
     setBusy(true);
     try {
-      await updateDoc(doc(db, "USERS", selected.id), { role: targetRole });
-      await logActivity("Role pengguna diubah", `${selected.name || selected.email} menjadi ${targetRole}`, selected.id);
-      setToast({ kind: "success", message: `Role berhasil diubah menjadi ${targetRole}.` });
+      await updateDoc(doc(db, "USERS", selected.id), {
+        role: targetRole,
+        permissions: targetPermissions,
+      });
+      await logActivity(
+        "Role & hak akses diubah",
+        `${selected.name || selected.email}: Role=${targetRole}`,
+        selected.id
+      );
+      setToast({ kind: "success", message: `Role dan hak akses untuk ${selected.name || selected.email} berhasil diperbarui.` });
       closeModal();
     } catch (operationError) {
       setToast({
         kind: "error",
-        message: operationError instanceof Error ? operationError.message : "Gagal mengubah role.",
+        message: operationError instanceof Error ? operationError.message : "Gagal memperbarui hak akses.",
       });
     } finally {
       setBusy(false);
@@ -297,15 +503,45 @@ export default function UserPages() {
     { value: "active", label: "Aktif" },
     { value: "banned", label: "Dibanned" },
     { value: "admin", label: "Admin" },
+    { value: "moderator", label: "Moderator" },
+    { value: "vip", label: "VIP" },
+    { value: "user", label: "User" },
   ];
+
+  // Filtered items untuk modal sinkronisasi
+  const filteredLibrary = useMemo(() => {
+    if (!syncData?.library) return [];
+    const term = syncSearch.trim().toLowerCase();
+    if (!term) return syncData.library;
+    return syncData.library.filter(
+      (item) =>
+        item.title.toLowerCase().includes(term) ||
+        item.sourceName.toLowerCase().includes(term) ||
+        item.status.toLowerCase().includes(term)
+    );
+  }, [syncData, syncSearch]);
+
+  const filteredHistory = useMemo(() => {
+    if (!syncData?.history) return [];
+    const term = syncSearch.trim().toLowerCase();
+    if (!term) return syncData.history;
+    return syncData.history.filter(
+      (item) =>
+        item.title.toLowerCase().includes(term) ||
+        item.sourceName.toLowerCase().includes(term) ||
+        String(item.lastChapterTitle || "").toLowerCase().includes(term)
+    );
+  }, [syncData, syncSearch]);
 
   return (
     <section className="min-h-full bg-[#14141e] p-4 text-white md:p-8">
       <div className="mx-auto max-w-7xl">
         <header className="mb-7">
-          <p className="text-sm font-medium uppercase tracking-[0.2em] text-sky-400">Monitoring</p>
-          <h1 className="mt-2 text-3xl font-semibold">Pengguna</h1>
-          <p className="mt-2 text-sm text-slate-400">Data sinkron langsung dari koleksi USERS.</p>
+          <p className="text-sm font-medium uppercase tracking-[0.2em] text-sky-400">Monitoring & RBAC</p>
+          <h1 className="mt-2 text-3xl font-semibold">Manajemen Pengguna</h1>
+          <p className="mt-2 text-sm text-slate-400">
+            Kelola role, hak akses granular, status pemblokiran, dan monitor riwayat baca cloud.
+          </p>
         </header>
 
         {toast && (
@@ -326,6 +562,7 @@ export default function UserPages() {
           </div>
         )}
 
+        {/* METRICS CARDS */}
         <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {[
             { label: "Total Pengguna", value: users.length, icon: UserCircle, color: "text-sky-300", bg: "bg-sky-400/10" },
@@ -333,21 +570,22 @@ export default function UserPages() {
             { label: "Pengguna Baru (7 Hari)", value: newThisWeek, icon: Devices, color: "text-violet-300", bg: "bg-violet-400/10" },
             { label: "Total Akun Dibanned", value: bannedCount, icon: ShieldWarning, color: "text-rose-300", bg: "bg-rose-400/10" },
           ].map((stat) => (
-            <article key={stat.label} className="rounded-2xl border border-white/[0.07] bg-[#1b1b28] p-5">
+            <article key={stat.label} className="rounded-2xl border border-white/[0.07] bg-[#1c1c28] p-5">
               <div className="flex items-start justify-between">
                 <div>
                   <p className="text-sm text-slate-400">{stat.label}</p>
                   <p className="mt-3 text-3xl font-semibold">{loading ? "—" : stat.value}</p>
                 </div>
                 <span className={`rounded-xl p-2.5 ${stat.bg} ${stat.color}`}>
-                  <stat.icon size={20} weight="duotone" />
+                  <stat.icon size={22} weight="duotone" />
                 </span>
               </div>
             </article>
           ))}
         </div>
 
-        <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-white/[0.07] bg-[#1b1b28] p-3 lg:flex-row lg:items-center lg:justify-between">
+        {/* CONTROLS: FILTER TABS & SEARCH */}
+        <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-white/[0.07] bg-[#1c1c28] p-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap gap-1">
             {filterTabs.map((tab) => (
               <button
@@ -356,7 +594,7 @@ export default function UserPages() {
                 onClick={() => setFilter(tab.value)}
                 className={`rounded-lg px-3 py-2 text-sm font-medium transition ${
                   filter === tab.value
-                    ? "bg-sky-500 text-slate-950"
+                    ? "bg-sky-500 text-slate-950 font-semibold"
                     : "text-slate-400 hover:bg-white/[0.05] hover:text-white"
                 }`}
               >
@@ -364,135 +602,183 @@ export default function UserPages() {
               </button>
             ))}
           </div>
-          <input
-            type="search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Cari nama, email, atau UID"
-            aria-label="Cari pengguna"
-            className="w-full rounded-xl border border-white/[0.08] bg-[#14141e] px-4 py-2.5 text-sm outline-none placeholder:text-slate-500 focus:border-sky-500 lg:max-w-sm"
-          />
+          <div className="relative w-full lg:max-w-sm">
+            <MagnifyingGlass size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Cari nama, email, atau UID..."
+              aria-label="Cari pengguna"
+              className="w-full rounded-xl border border-white/[0.08] bg-[#14141e] py-2.5 pl-10 pr-4 text-sm outline-none placeholder:text-slate-500 focus:border-sky-500 transition"
+            />
+          </div>
         </div>
 
+        {/* USERS TABLE */}
         {loading ? (
-          <div className="rounded-2xl border border-white/[0.07] bg-[#1b1b28] py-16 text-center text-slate-300">Memuat pengguna...</div>
+          <div className="rounded-2xl border border-white/[0.07] bg-[#1c1c28] py-16 text-center text-slate-300">
+            Memuat pengguna...
+          </div>
         ) : filteredUsers.length === 0 ? (
-          <div className="rounded-2xl border border-white/[0.07] bg-[#1b1b28] py-16 text-center text-slate-400">
-            {users.length ? "Tidak ada pengguna yang cocok." : "Belum ada data pengguna."}
+          <div className="rounded-2xl border border-white/[0.07] bg-[#1c1c28] py-16 text-center text-slate-400">
+            {users.length ? "Tidak ada pengguna yang cocok dengan pencarian/filter." : "Belum ada data pengguna di database."}
           </div>
         ) : (
-          <div className="overflow-hidden rounded-2xl border border-white/[0.07] bg-[#1b1b28]">
+          <div className="overflow-hidden rounded-2xl border border-white/[0.07] bg-[#1c1c28]">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px] text-left">
-                <thead className="border-b border-white/[0.07] bg-white/[0.02] text-xs uppercase tracking-wide text-slate-500">
+              <table className="w-full min-w-[1020px] text-left">
+                <thead className="border-b border-white/[0.07] bg-white/[0.02] text-xs uppercase tracking-wide text-slate-400">
                   <tr>
                     <th className="px-5 py-4">Pengguna</th>
-                    <th className="px-5 py-4">Perangkat</th>
-                    <th className="px-5 py-4">Login Terakhir</th>
-                    <th className="px-5 py-4">Role</th>
+                    <th className="px-5 py-4">Perangkat & Info</th>
+                    <th className="px-5 py-4">Aktivitas Terakhir</th>
+                    <th className="px-5 py-4">Role & Hak Akses</th>
+                    <th className="px-5 py-4">Cloud Sync</th>
                     <th className="px-5 py-4">Status</th>
                     <th className="px-5 py-4 text-right">Aksi</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/[0.06]">
                   {filteredUsers.map((user) => (
-                    <tr key={user.id} className="transition hover:bg-white/[0.025]">
+                    <tr key={user.id} className="transition hover:bg-white/[0.02]">
+                      {/* 1. Pengguna */}
                       <td className="px-5 py-4">
-                        <div className="flex min-w-[230px] items-center gap-3">
+                        <div className="flex min-w-[220px] items-center gap-3">
                           {user.photoUrl ? (
-                            <img src={user.photoUrl} alt="" className="h-10 w-10 rounded-full border border-white/10 object-cover" />
+                            <img
+                              src={user.photoUrl}
+                              alt=""
+                              className="h-10 w-10 rounded-full border border-white/10 object-cover"
+                            />
                           ) : (
-                            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-700 text-slate-300">
+                            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-800 text-slate-400">
                               <UserCircle size={24} weight="duotone" />
                             </span>
                           )}
                           <div className="min-w-0">
-                            <p className="truncate font-medium">{user.name || "Tanpa nama"}</p>
-                            <p className="mt-0.5 truncate text-sm text-slate-400">{user.email || "-"}</p>
+                            <p className="truncate font-medium">{user.name || "Tanpa Nama"}</p>
+                            <p className="mt-0.5 truncate text-xs text-slate-400">{user.email || "-"}</p>
                             <button
                               type="button"
                               onClick={() => void copyUid(user.uid)}
-                              className="mt-1 flex items-center gap-1 text-[11px] text-slate-500 hover:text-sky-300"
-                              title={user.uid}
+                              className="mt-1 flex items-center gap-1 font-mono text-[11px] text-slate-500 hover:text-sky-300 transition"
+                              title="Salin UID"
                             >
-                              <span className="max-w-[180px] truncate">{user.uid}</span>
+                              <span className="max-w-[150px] truncate">{user.uid}</span>
                               <Copy size={12} />
                             </button>
                           </div>
                         </div>
                       </td>
+
+                      {/* 2. Perangkat */}
                       <td className="px-5 py-4">
-                        <div className="flex items-center gap-2">
-                          <span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${
+                        <span
+                          className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                             user.provider === "google"
                               ? "bg-sky-400/10 text-sky-300"
-                              : "bg-slate-700/70 text-slate-300"
-                          }`}>
-                            {user.provider === "google" ? "Google" : "Guest"}
-                          </span>
-                        </div>
-                        <p className="mt-2 max-w-[170px] truncate text-xs text-slate-400">
-                          {user.deviceInfo.appVersion || "Versi -"} / {user.deviceInfo.deviceModel || "Perangkat -"}
+                              : "bg-slate-800 text-slate-400"
+                          }`}
+                        >
+                          {user.provider === "google" ? "Google Account" : "Guest / Direct"}
+                        </span>
+                        <p className="mt-1.5 max-w-[160px] truncate text-xs text-slate-400">
+                          {user.deviceInfo.appVersion ? `v${user.deviceInfo.appVersion}` : "v1.0.0"} •{" "}
+                          {user.deviceInfo.deviceModel || "Android Device"}
                         </p>
                       </td>
+
+                      {/* 3. Login Terakhir */}
                       <td className="px-5 py-4 text-sm text-slate-300">
                         {relativeTime(user.lastLoginAt)}
                       </td>
+
+                      {/* 4. Role & Hak Akses */}
                       <td className="px-5 py-4">
                         <button
                           type="button"
                           onClick={() => openModal("role", user)}
-                          className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            user.role === "admin"
-                              ? "bg-violet-400/10 text-violet-300"
-                              : "bg-slate-700/70 text-slate-300"
-                          }`}
+                          className={`group inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition ${roleBadgeClass(
+                            user.role
+                          )}`}
+                          title="Klik untuk ubah role & permissions"
                         >
-                          {user.role === "admin" ? "Admin" : "User"}
+                          {user.role === "admin" && <ShieldCheck size={14} weight="fill" />}
+                          {user.role === "moderator" && <ShieldWarning size={14} weight="fill" />}
+                          {user.role === "vip" && <Crown size={14} weight="fill" />}
+                          {user.role === "user" && <User size={14} weight="bold" />}
+                          <span>{roleLabel(user.role)}</span>
+                          <PencilSimple size={12} className="opacity-0 group-hover:opacity-100 transition" />
                         </button>
                       </td>
+
+                      {/* 5. Cloud Sync Monitoring */}
+                      <td className="px-5 py-4">
+                        <button
+                          type="button"
+                          onClick={() => openModal("sync", user)}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/20 bg-sky-400/10 px-2.5 py-1 text-xs font-medium text-sky-300 hover:bg-sky-400/20 transition"
+                          title="Buka detail koleksi & riwayat baca"
+                        >
+                          <BookOpen size={14} weight="duotone" />
+                          <span>Koleksi</span>
+                          {(typeof user.libraryCount === "number" || typeof user.historyCount === "number") && (
+                            <span className="ml-0.5 rounded-full bg-sky-400/20 px-1.5 py-0.2 text-[10px] text-sky-200">
+                              {(user.libraryCount || 0) + (user.historyCount || 0)}
+                            </span>
+                          )}
+                        </button>
+                      </td>
+
+                      {/* 6. Status */}
                       <td className="px-5 py-4">
                         {user.isBanned ? (
                           <button
                             type="button"
                             onClick={() => openModal("reason", user)}
-                            className="rounded-full bg-rose-400/10 px-2.5 py-1 text-xs font-semibold text-rose-300 hover:bg-rose-400/20"
+                            className="inline-flex items-center gap-1 rounded-full border border-rose-400/30 bg-rose-400/10 px-2.5 py-0.5 text-xs font-semibold text-rose-300 hover:bg-rose-400/20 transition"
+                            title="Lihat alasan banned"
                           >
+                            <ShieldWarning size={13} weight="bold" />
                             Banned
                           </button>
                         ) : (
-                          <span className="inline-flex rounded-full bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-300">
+                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-0.5 text-xs font-semibold text-emerald-300">
                             Aktif
                           </span>
                         )}
                       </td>
-                      <td className="px-5 py-4">
-                        <div className="flex justify-end gap-2">
+
+                      {/* 7. Aksi */}
+                      <td className="px-5 py-4 text-right">
+                        <div className="flex items-center justify-end gap-2">
                           {user.isBanned ? (
                             <button
                               type="button"
                               onClick={() => void unbanUser(user)}
                               disabled={busy}
-                              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/20 px-3 py-2 text-xs font-medium text-emerald-300 transition hover:bg-emerald-400/10 disabled:opacity-50"
+                              className="inline-flex items-center gap-1 rounded-lg border border-emerald-400/20 px-2.5 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-400/10 disabled:opacity-50 transition"
                             >
-                              <UserPlus size={15} weight="bold" />
+                              <UserPlus size={14} weight="bold" />
                               Unban
                             </button>
                           ) : (
                             <button
                               type="button"
                               onClick={() => openModal("ban", user)}
-                              className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/20 px-3 py-2 text-xs font-medium text-amber-300 transition hover:bg-amber-400/10"
+                              className="inline-flex items-center gap-1 rounded-lg border border-amber-400/20 px-2.5 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-400/10 transition"
                             >
-                              <UserMinus size={15} weight="bold" />
+                              <UserMinus size={14} weight="bold" />
                               Ban
                             </button>
                           )}
                           <button
                             type="button"
                             onClick={() => openModal("delete", user)}
-                            aria-label={`Hapus ${user.email}`}
-                            className="rounded-lg border border-white/[0.08] p-2 text-slate-400 transition hover:border-rose-400/40 hover:text-rose-300"
+                            aria-label={`Hapus ${user.email || user.name}`}
+                            className="rounded-lg border border-white/[0.08] p-1.5 text-slate-400 hover:border-rose-400/40 hover:text-rose-300 transition"
+                            title="Hapus user secara permanen"
                           >
                             <Trash size={16} />
                           </button>
@@ -506,126 +792,400 @@ export default function UserPages() {
           </div>
         )}
 
+        {/* MODAL HANDLERS */}
         {modal && selected && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="presentation">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" role="presentation">
             <section
               role="dialog"
               aria-modal="true"
               aria-labelledby="user-action-title"
-              className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#1b1b28] p-5 shadow-2xl sm:p-6"
+              className={`max-h-[90vh] w-full overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#1c1c28] p-5 shadow-2xl sm:p-6 ${
+                modal === "sync" ? "max-w-3xl" : "max-w-lg"
+              }`}
             >
-              <header className="mb-5 flex items-start justify-between">
+              <header className="mb-5 flex items-start justify-between border-b border-white/[0.07] pb-4">
                 <div>
-                  <h2 id="user-action-title" className="text-xl font-semibold">
+                  <h2 id="user-action-title" className="text-xl font-semibold text-white">
                     {modal === "ban" && "Banned Pengguna"}
                     {modal === "delete" && "Hapus Data Pengguna"}
-                    {modal === "role" && "Ubah Role Pengguna"}
-                    {modal === "reason" && "Alasan Banned"}
+                    {modal === "role" && "Kelola Role & Hak Akses Pengguna"}
+                    {modal === "reason" && "Detail Alasan Banned"}
+                    {modal === "sync" && "Koleksi Pustaka & Riwayat User"}
                   </h2>
-                  <p className="mt-1 text-sm text-slate-400">{selected.name || selected.email}</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {selected.name || "Tanpa Nama"} • {selected.email || selected.uid}
+                  </p>
                 </div>
                 <button
                   type="button"
                   onClick={closeModal}
                   disabled={busy}
                   aria-label="Tutup modal"
-                  className="rounded-lg p-2 text-slate-400 hover:bg-white/[0.06] hover:text-white"
+                  className="rounded-lg p-2 text-slate-400 hover:bg-white/[0.06] hover:text-white transition"
                 >
                   <X size={20} />
                 </button>
               </header>
 
+              {/* MODAL 1: KELOLA ROLE & HAK AKSES */}
+              {modal === "role" && (
+                <div className="space-y-5">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300">Pilih Role Akun</label>
+                    <select
+                      value={targetRole}
+                      onChange={(event) => handleRoleChange(event.target.value as UserRole)}
+                      className="mt-1.5 w-full rounded-xl border border-white/[0.09] bg-[#14141e] px-3.5 py-2.5 text-sm outline-none focus:border-sky-500 transition"
+                    >
+                      <option value="admin">Admin (Akses penuh dashboard & konfigurasi API)</option>
+                      <option value="moderator">Moderator (Kelola ekstensi komik & ban user)</option>
+                      <option value="vip">VIP Member (Bypass rate limit & fitur premium)</option>
+                      <option value="user">User Standar (Pengguna aplikasi biasa)</option>
+                    </select>
+                  </div>
+
+                  {/* Permissions Checklist */}
+                  <div className="rounded-xl border border-white/[0.07] bg-[#14141e] p-4">
+                    <p className="text-sm font-medium text-slate-200">Hak Akses Spesifik (Permissions)</p>
+                    <p className="mt-0.5 text-xs text-slate-400">
+                      Preset otomatis aktif sesuai role, namun Anda dapat mencentang/menonaktifkan izin khusus di bawah ini:
+                    </p>
+
+                    <div className="mt-3.5 space-y-2.5">
+                      {[
+                        {
+                          key: "canAccessAdminPanel" as const,
+                          label: "Akses Admin Dashboard",
+                          desc: "Boleh login dan membuka portal admin panel.",
+                        },
+                        {
+                          key: "canManageExtensions" as const,
+                          label: "Kelola Ekstensi Komik",
+                          desc: "Bisa menambah, mengedit, dan menghapus sumber komik/anime.",
+                        },
+                        {
+                          key: "canBanUsers" as const,
+                          label: "Blokir & Moderasi Pengguna",
+                          desc: "Bisa melakukan ban atau unban akun pengguna lain.",
+                        },
+                        {
+                          key: "bypassRateLimit" as const,
+                          label: "Bypass Rate Limit API",
+                          desc: "Bebas batasan frekuensi panggilan API eksternal.",
+                        },
+                        {
+                          key: "canAccessNsfw" as const,
+                          label: "Akses Konten Dewasa / NSFW 18+",
+                          desc: "Membuka katalog konten dewasa pada ekstensi yang didukung.",
+                        },
+                      ].map((perm) => (
+                        <label
+                          key={perm.key}
+                          className="flex items-start gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] p-2.5 hover:bg-white/[0.04] cursor-pointer transition"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={targetPermissions[perm.key]}
+                            onChange={() => togglePermission(perm.key)}
+                            className="mt-0.5 h-4 w-4 rounded accent-sky-500 cursor-pointer"
+                          />
+                          <div className="min-w-0">
+                            <span className="block text-sm font-medium text-slate-200">{perm.label}</span>
+                            <span className="block text-xs text-slate-400">{perm.desc}</span>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={closeModal}
+                      disabled={busy}
+                      className="rounded-lg border border-white/[0.09] px-4 py-2 text-sm text-slate-300 hover:bg-white/[0.05]"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void saveRoleAndPermissions()}
+                      disabled={busy}
+                      className="inline-flex items-center gap-2 rounded-lg bg-sky-500 px-5 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-400 disabled:opacity-50 transition"
+                    >
+                      <ShieldCheck size={16} weight="bold" />
+                      {busy ? "Menyimpan..." : "Simpan Hak Akses"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* MODAL 2: LIHAT KOLEKSI & RIWAYAT USER */}
+              {modal === "sync" && (
+                <div className="space-y-4">
+                  {/* Status Bar */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.07] bg-[#14141e] p-3 text-xs">
+                    <div className="flex items-center gap-4 text-slate-300">
+                      <span>
+                        Pustaka: <strong className="text-sky-300">{syncData?.library.length || 0}</strong> komik
+                      </span>
+                      <span>
+                        Riwayat: <strong className="text-violet-300">{syncData?.history.length || 0}</strong> dibaca
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-slate-400">
+                      <ClockCounterClockwise size={14} />
+                      <span>
+                        Terakhir sinkron:{" "}
+                        {syncData?.lastSyncedAt
+                          ? new Date(syncData.lastSyncedAt).toLocaleString("id-ID")
+                          : "Belum pernah"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Tabs & Search */}
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex rounded-lg border border-white/[0.08] bg-[#14141e] p-1 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setSyncTab("library")}
+                        className={`rounded-md px-3 py-1.5 font-medium transition ${
+                          syncTab === "library"
+                            ? "bg-sky-500 text-slate-950 font-semibold"
+                            : "text-slate-400 hover:text-white"
+                        }`}
+                      >
+                        Pustaka Bookmark ({syncData?.library.length || 0})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSyncTab("history")}
+                        className={`rounded-md px-3 py-1.5 font-medium transition ${
+                          syncTab === "history"
+                            ? "bg-sky-500 text-slate-950 font-semibold"
+                            : "text-slate-400 hover:text-white"
+                        }`}
+                      >
+                        Riwayat Baca ({syncData?.history.length || 0})
+                      </button>
+                    </div>
+
+                    <input
+                      type="search"
+                      value={syncSearch}
+                      onChange={(e) => setSyncSearch(e.target.value)}
+                      placeholder={`Cari di ${syncTab === "library" ? "pustaka" : "riwayat"}...`}
+                      className="rounded-lg border border-white/[0.08] bg-[#14141e] px-3 py-1.5 text-xs text-white outline-none placeholder:text-slate-500 focus:border-sky-500 sm:w-56"
+                    />
+                  </div>
+
+                  {/* Content List */}
+                  {syncLoading ? (
+                    <div className="py-16 text-center text-sm text-slate-400">Memuat data sinkronisasi...</div>
+                  ) : syncTab === "library" ? (
+                    filteredLibrary.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-white/[0.08] py-12 text-center text-sm text-slate-500">
+                        {syncSearch ? "Tidak ada komik yang sesuai kata kunci." : "User belum menyimpan bookmark komik."}
+                      </div>
+                    ) : (
+                      <div className="grid max-h-[50vh] gap-3 overflow-y-auto pr-1 sm:grid-cols-2">
+                        {filteredLibrary.map((item, idx) => (
+                          <div
+                            key={`${item.comicId}-${idx}`}
+                            className="flex gap-3 rounded-xl border border-white/[0.06] bg-[#14141e] p-3 text-left"
+                          >
+                            {item.coverUrl ? (
+                              <img
+                                src={item.coverUrl}
+                                alt=""
+                                className="h-16 w-12 flex-shrink-0 rounded-lg object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-16 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-slate-800 text-slate-500">
+                                <BookOpen size={20} />
+                              </div>
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-medium text-white">{item.title}</p>
+                              <div className="mt-1 flex items-center gap-1.5">
+                                <span className="rounded bg-sky-400/10 px-1.5 py-0.5 text-[10px] text-sky-300">
+                                  {item.sourceName || "Unknown"}
+                                </span>
+                                {item.status && (
+                                  <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300">
+                                    {item.status}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="mt-2 text-[10px] text-slate-500">
+                                Update: {relativeTime(item.updatedAt)}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  ) : filteredHistory.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-white/[0.08] py-12 text-center text-sm text-slate-500">
+                      {syncSearch ? "Tidak ada riwayat yang sesuai kata kunci." : "User belum memiliki riwayat baca."}
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+                      {filteredHistory.map((item, idx) => (
+                        <div
+                          key={`${item.comicId}-${idx}`}
+                          className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-[#14141e] p-3"
+                        >
+                          <div className="flex min-w-0 items-center gap-3">
+                            {item.coverUrl ? (
+                              <img
+                                src={item.coverUrl}
+                                alt=""
+                                className="h-12 w-10 flex-shrink-0 rounded object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-12 w-10 flex-shrink-0 items-center justify-center rounded bg-slate-800 text-slate-500">
+                                <BookOpen size={16} />
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-white">{item.title}</p>
+                              <p className="mt-0.5 truncate text-xs text-sky-300">
+                                {item.lastChapterTitle || `Chapter ${item.lastChapterNumber || "-"}`}
+                                {item.lastPage ? ` • Hal ${item.lastPage}` : ""}
+                              </p>
+                              <span className="text-[10px] text-slate-500">{item.sourceName}</span>
+                            </div>
+                          </div>
+                          <span className="flex-shrink-0 text-right text-[11px] text-slate-400">
+                            {relativeTime(item.updatedAt)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex justify-end pt-2">
+                    <button
+                      type="button"
+                      onClick={closeModal}
+                      className="rounded-lg border border-white/[0.09] px-4 py-2 text-sm text-slate-300 hover:bg-white/[0.05]"
+                    >
+                      Tutup
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* MODAL 3: BAN USER */}
               {modal === "ban" && (
                 <div className="space-y-4">
                   <label className="block text-sm text-slate-300">
-                    Pilih alasan
+                    Pilih Alasan Pemblokiran
                     <select
                       value={banReason}
                       onChange={(event) => setBanReason(event.target.value)}
-                      className="mt-1.5 w-full rounded-lg border border-white/[0.09] bg-[#14141e] px-3 py-2.5 outline-none focus:border-amber-400"
+                      className="mt-1.5 w-full rounded-lg border border-white/[0.09] bg-[#14141e] px-3 py-2.5 text-sm outline-none focus:border-amber-400 transition"
                     >
-                      <option value="">Pilih alasan...</option>
-                      <option value="Spamming API">Spamming API</option>
-                      <option value="Pelanggaran Ketentuan">Pelanggaran Ketentuan</option>
+                      <option value="">Pilih alasan umum...</option>
+                      <option value="Spamming API & Abusing Resources">Spamming API & Abusing Resources</option>
+                      <option value="Pelanggaran Ketentuan Layanan">Pelanggaran Ketentuan Layanan</option>
+                      <option value="Aktivitas Scraping Ilegal">Aktivitas Scraping Ilegal</option>
+                      <option value="Penggunaan Akun Berganda / Bot">Penggunaan Akun Berganda / Bot</option>
                     </select>
                   </label>
+
                   <label className="block text-sm text-slate-300">
-                    Alasan kustom
+                    Alasan Kustom / Tambahan
                     <input
                       value={customReason}
                       onChange={(event) => setCustomReason(event.target.value)}
-                      placeholder="Masukkan alasan lainnya"
-                      className="mt-1.5 w-full rounded-lg border border-white/[0.09] bg-[#14141e] px-3 py-2.5 outline-none placeholder:text-slate-600 focus:border-amber-400"
+                      placeholder="Tulis alasan spesifik jika tidak ada di pilihan di atas"
+                      className="mt-1.5 w-full rounded-lg border border-white/[0.09] bg-[#14141e] px-3 py-2.5 text-sm outline-none placeholder:text-slate-600 focus:border-amber-400 transition"
                     />
                   </label>
+
                   <div className="flex justify-end gap-3 pt-2">
-                    <button type="button" onClick={closeModal} disabled={busy} className="rounded-lg border border-white/[0.09] px-4 py-2.5 text-sm text-slate-300 hover:bg-white/[0.05]">
-                      Batal
-                    </button>
-                    <button type="button" onClick={() => void banUser()} disabled={busy} className="rounded-lg bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-400 disabled:opacity-50">
-                      {busy ? "Memproses..." : "Konfirmasi Ban"}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {modal === "delete" && (
-                <div>
-                  <p className="text-sm leading-6 text-slate-300">
-                    Tindakan ini akan menghapus dokumen pengguna dari Firestore secara permanen dan tidak dapat dibatalkan.
-                  </p>
-                  <div className="mt-5 flex justify-end gap-3">
-                    <button type="button" onClick={closeModal} disabled={busy} className="rounded-lg border border-white/[0.09] px-4 py-2.5 text-sm text-slate-300 hover:bg-white/[0.05]">
-                      Batal
-                    </button>
-                    <button type="button" onClick={() => void deleteUser()} disabled={busy} className="rounded-lg bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-400 disabled:opacity-50">
-                      {busy ? "Menghapus..." : "Hapus Permanen"}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {modal === "role" && (
-                <div className="space-y-4">
-                  <label className="block text-sm text-slate-300">
-                    Role
-                    <select
-                      value={targetRole}
-                      onChange={(event) => setTargetRole(event.target.value as "user" | "admin")}
-                      className="mt-1.5 w-full rounded-lg border border-white/[0.09] bg-[#14141e] px-3 py-2.5 outline-none focus:border-violet-400"
+                    <button
+                      type="button"
+                      onClick={closeModal}
+                      disabled={busy}
+                      className="rounded-lg border border-white/[0.09] px-4 py-2.5 text-sm text-slate-300 hover:bg-white/[0.05]"
                     >
-                      <option value="user">User</option>
-                      <option value="admin">Admin</option>
-                    </select>
-                  </label>
-                  <div className="flex justify-end gap-3">
-                    <button type="button" onClick={closeModal} disabled={busy} className="rounded-lg border border-white/[0.09] px-4 py-2.5 text-sm text-slate-300 hover:bg-white/[0.05]">
                       Batal
                     </button>
-                    <button type="button" onClick={() => void changeRole()} disabled={busy} className="rounded-lg bg-violet-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-400 disabled:opacity-50">
-                      {busy ? "Memproses..." : "Simpan Role"}
+                    <button
+                      type="button"
+                      onClick={() => void banUser()}
+                      disabled={busy}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-400 disabled:opacity-50 transition"
+                    >
+                      <UserMinus size={16} weight="bold" />
+                      {busy ? "Memproses..." : "Konfirmasi Blokir Akun"}
                     </button>
                   </div>
                 </div>
               )}
 
+              {/* MODAL 4: DETAIL ALASAN BANNED */}
               {modal === "reason" && (
                 <div>
                   <div className="rounded-xl border border-rose-400/20 bg-rose-400/[0.07] p-4">
                     <div className="flex items-center gap-2 text-rose-300">
-                      <ShieldWarning size={18} weight="duotone" />
-                      <p className="text-sm font-semibold">Akun dibanned</p>
+                      <ShieldWarning size={20} weight="duotone" />
+                      <p className="text-sm font-semibold">Status: Akun Sedang Diblokir</p>
                     </div>
                     <p className="mt-2 text-sm text-slate-300">{selected.banReason || "Tidak ada alasan tercatat."}</p>
                     {parseDate(selected.bannedAt) && (
                       <p className="mt-3 text-xs text-slate-500">
-                        {parseDate(selected.bannedAt)?.toLocaleString("id-ID")}
+                        Diblokir pada: {parseDate(selected.bannedAt)?.toLocaleString("id-ID")}
                       </p>
                     )}
                   </div>
-                  <div className="mt-5 flex justify-end">
-                    <button type="button" onClick={closeModal} className="rounded-lg border border-white/[0.09] px-4 py-2.5 text-sm text-slate-300 hover:bg-white/[0.05]">
+                  <div className="mt-5 flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => void unbanUser(selected)}
+                      disabled={busy}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400 transition"
+                    >
+                      <UserPlus size={16} weight="bold" />
+                      Pulihkan Akun Sekarang
+                    </button>
+                    <button
+                      type="button"
+                      onClick={closeModal}
+                      className="rounded-lg border border-white/[0.09] px-4 py-2 text-sm text-slate-300 hover:bg-white/[0.05]"
+                    >
                       Tutup
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* MODAL 5: DELETE USER */}
+              {modal === "delete" && (
+                <div>
+                  <p className="text-sm leading-6 text-slate-300">
+                    Tindakan ini akan menghapus dokumen profil pengguna dari koleksi <code className="text-rose-300">USERS/{selected.id}</code> secara permanen.
+                  </p>
+                  <div className="mt-5 flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={closeModal}
+                      disabled={busy}
+                      className="rounded-lg border border-white/[0.09] px-4 py-2.5 text-sm text-slate-300 hover:bg-white/[0.05]"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void deleteUser()}
+                      disabled={busy}
+                      className="rounded-lg bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-400 disabled:opacity-50 transition"
+                    >
+                      {busy ? "Menghapus..." : "Hapus Permanen"}
                     </button>
                   </div>
                 </div>
