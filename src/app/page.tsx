@@ -103,7 +103,7 @@ export default function Home() {
     maintenanceMode: boolean;
   }>({
     latestVersion: "1.2.0",
-    downloadUrl: "https://github.com",
+    downloadUrl: "/aplikasi/Komryuu.apk",
     changelog: "Pembaruan v1.2.0: Cloud Sync Firestore, perbaikan scraper Shinigami, dan mode hemat kuota.",
     maintenanceMode: false,
   });
@@ -162,7 +162,7 @@ export default function Home() {
           const update = (data.appUpdate && typeof data.appUpdate === "object") ? data.appUpdate : {};
           setAppConfig({
             latestVersion: typeof update.latestAppVersion === "string" ? update.latestAppVersion : "1.2.0",
-            downloadUrl: typeof update.downloadUrl === "string" && update.downloadUrl ? update.downloadUrl : "https://github.com",
+            downloadUrl: typeof update.downloadUrl === "string" && update.downloadUrl ? update.downloadUrl : "/aplikasi/Komryuu.apk",
             changelog: typeof update.changelog === "string" ? update.changelog : "Peningkatan performa dan sinkronisasi cloud.",
             maintenanceMode: data.maintenanceMode === true,
           });
@@ -615,9 +615,8 @@ Content-Type: application/json
             {/* Download Button & Requirements */}
             <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-4">
               <a
-                href={appConfig.downloadUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+                href={appConfig.downloadUrl || "/aplikasi/Komryuu.apk"}
+                download="Komryuu.apk"
                 className="group inline-flex items-center gap-3 rounded-2xl bg-gradient-to-r from-indigo-600 via-indigo-500 to-violet-600 px-8 py-4 text-base font-semibold text-white shadow-xl shadow-indigo-600/30 transition-all hover:scale-105 hover:shadow-indigo-500/50"
               >
                 <Download size={20} className="transition-transform group-hover:-translate-y-0.5" />
@@ -644,7 +643,7 @@ Content-Type: application/json
               </span>
               <span className="flex items-center gap-1.5">
                 <Check size={14} className="text-emerald-400" />
-                Ukuran ~18 MB
+                Ukuran ~31.5 MB (Komryuu.apk)
               </span>
             </div>
           </div>

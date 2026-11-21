@@ -39,7 +39,7 @@ export const DEFAULT_APP_UPDATE: AppUpdate = {
   minAppVersion: "1.0.0",
   latestAppVersion: "1.0.0",
   forceUpdate: false,
-  downloadUrl: "",
+  downloadUrl: "/aplikasi/Komryuu.apk",
   changelog: "",
 };
 
@@ -142,9 +142,10 @@ export function normalizeAppSettings(value: Record<string, unknown>): AppSetting
       downloadUrl:
         typeof value.appUpdate === "object" &&
         value.appUpdate !== null &&
-        typeof (value.appUpdate as Record<string, unknown>).downloadUrl === "string"
+        typeof (value.appUpdate as Record<string, unknown>).downloadUrl === "string" &&
+        (value.appUpdate as Record<string, unknown>).downloadUrl
           ? ((value.appUpdate as Record<string, unknown>).downloadUrl as string)
-          : "",
+          : "/aplikasi/Komryuu.apk",
       changelog:
         typeof value.appUpdate === "object" &&
         value.appUpdate !== null &&

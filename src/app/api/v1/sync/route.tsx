@@ -52,6 +52,155 @@ function parseTimestamp(val: unknown): number {
   return 0;
 }
 
+function sanitizeLibraryItem(item: unknown): ComicBookmark | null {
+  if (!isRecord(item)) return null;
+
+  const comicId = (
+    typeof item.comicId === "string" ? item.comicId :
+    typeof item.comic_id === "string" ? item.comic_id :
+    typeof item.id === "string" ? item.id :
+    typeof item.komikId === "string" ? item.komikId :
+    typeof item.mangaId === "string" ? item.mangaId : ""
+  ).trim();
+
+  if (!comicId) return null;
+
+  const title = (
+    typeof item.title === "string" ? item.title :
+    typeof item.judul === "string" ? item.judul :
+    typeof item.comicTitle === "string" ? item.comicTitle :
+    typeof item.name === "string" ? item.name :
+    typeof item.judulKomik === "string" ? item.judulKomik :
+    "Tanpa Judul"
+  ).trim();
+
+  const coverUrl = (
+    typeof item.coverUrl === "string" ? item.coverUrl :
+    typeof item.cover_url === "string" ? item.cover_url :
+    typeof item.cover === "string" ? item.cover :
+    typeof item.gambar === "string" ? item.gambar :
+    typeof item.thumbnail === "string" ? item.thumbnail :
+    typeof item.image === "string" ? item.image :
+    typeof item.foto === "string" ? item.foto : ""
+  ).trim();
+
+  const sourceName = (
+    typeof item.sourceName === "string" ? item.sourceName :
+    typeof item.source_name === "string" ? item.source_name :
+    typeof item.source === "string" ? item.source :
+    typeof item.sumber === "string" ? item.sumber :
+    typeof item.extensionName === "string" ? item.extensionName :
+    "Komik"
+  ).trim();
+
+  const status = (
+    typeof item.status === "string" ? item.status :
+    typeof item.state === "string" ? item.state : ""
+  ).trim();
+
+  const updatedAt =
+    item.updatedAt !== undefined ? item.updatedAt :
+    item.updated_at !== undefined ? item.updated_at :
+    item.timestamp !== undefined ? item.timestamp :
+    item.waktu !== undefined ? item.waktu :
+    Date.now();
+
+  return {
+    ...item,
+    comicId,
+    title,
+    coverUrl,
+    sourceName,
+    status,
+    updatedAt: typeof updatedAt === "number" || typeof updatedAt === "string" ? updatedAt : Date.now(),
+  };
+}
+
+function sanitizeHistoryItem(item: unknown): ReadingHistory | null {
+  if (!isRecord(item)) return null;
+
+  const comicId = (
+    typeof item.comicId === "string" ? item.comicId :
+    typeof item.comic_id === "string" ? item.comic_id :
+    typeof item.id === "string" ? item.id :
+    typeof item.komikId === "string" ? item.komikId :
+    typeof item.mangaId === "string" ? item.mangaId : ""
+  ).trim();
+
+  if (!comicId) return null;
+
+  const title = (
+    typeof item.title === "string" ? item.title :
+    typeof item.judul === "string" ? item.judul :
+    typeof item.comicTitle === "string" ? item.comicTitle :
+    typeof item.name === "string" ? item.name :
+    typeof item.judulKomik === "string" ? item.judulKomik :
+    "Tanpa Judul"
+  ).trim();
+
+  const coverUrl = (
+    typeof item.coverUrl === "string" ? item.coverUrl :
+    typeof item.cover_url === "string" ? item.cover_url :
+    typeof item.cover === "string" ? item.cover :
+    typeof item.gambar === "string" ? item.gambar :
+    typeof item.thumbnail === "string" ? item.thumbnail :
+    typeof item.image === "string" ? item.image :
+    typeof item.foto === "string" ? item.foto : ""
+  ).trim();
+
+  const sourceName = (
+    typeof item.sourceName === "string" ? item.sourceName :
+    typeof item.source_name === "string" ? item.source_name :
+    typeof item.source === "string" ? item.source :
+    typeof item.sumber === "string" ? item.sumber :
+    typeof item.extensionName === "string" ? item.extensionName :
+    "Komik"
+  ).trim();
+
+  const lastChapterNumber =
+    item.lastChapterNumber !== undefined ? item.lastChapterNumber :
+    item.last_chapter_number !== undefined ? item.last_chapter_number :
+    item.chapter !== undefined ? item.chapter :
+    item.lastChapter !== undefined ? item.lastChapter :
+    item.chapterNumber !== undefined ? item.chapterNumber :
+    item.bab !== undefined ? item.bab :
+    "";
+
+  const lastChapterTitle = (
+    typeof item.lastChapterTitle === "string" ? item.lastChapterTitle :
+    typeof item.last_chapter_title === "string" ? item.last_chapter_title :
+    typeof item.chapterTitle === "string" ? item.chapterTitle :
+    typeof item.judulChapter === "string" ? item.judulChapter :
+    typeof item.judul_bab === "string" ? item.judul_bab : ""
+  ).trim();
+
+  const lastPage =
+    typeof item.lastPage === "number" ? item.lastPage :
+    typeof item.last_page === "number" ? item.last_page :
+    typeof item.page === "number" ? item.page :
+    typeof item.halaman === "number" ? item.halaman :
+    1;
+
+  const updatedAt =
+    item.updatedAt !== undefined ? item.updatedAt :
+    item.updated_at !== undefined ? item.updated_at :
+    item.timestamp !== undefined ? item.timestamp :
+    item.waktu !== undefined ? item.waktu :
+    Date.now();
+
+  return {
+    ...item,
+    comicId,
+    title,
+    coverUrl,
+    sourceName,
+    lastChapterNumber: typeof lastChapterNumber === "string" || typeof lastChapterNumber === "number" ? lastChapterNumber : "",
+    lastChapterTitle,
+    lastPage,
+    updatedAt: typeof updatedAt === "number" || typeof updatedAt === "string" ? updatedAt : Date.now(),
+  };
+}
+
 function mergeLibrary(
   existing: ComicBookmark[],
   incoming: ComicBookmark[]
@@ -116,50 +265,6 @@ function mergeHistory(
   return Array.from(map.values());
 }
 
-function sanitizeLibraryItem(item: unknown): ComicBookmark | null {
-  if (!isRecord(item)) return null;
-  const comicId = typeof item.comicId === "string" ? item.comicId.trim() : "";
-  if (!comicId) return null;
-
-  return {
-    ...item,
-    comicId,
-    title: typeof item.title === "string" ? item.title.trim() : "",
-    coverUrl: typeof item.coverUrl === "string" ? item.coverUrl.trim() : "",
-    sourceName: typeof item.sourceName === "string" ? item.sourceName.trim() : "",
-    status: typeof item.status === "string" ? item.status.trim() : "",
-    updatedAt:
-      typeof item.updatedAt === "number" || typeof item.updatedAt === "string"
-        ? item.updatedAt
-        : Date.now(),
-  };
-}
-
-function sanitizeHistoryItem(item: unknown): ReadingHistory | null {
-  if (!isRecord(item)) return null;
-  const comicId = typeof item.comicId === "string" ? item.comicId.trim() : "";
-  if (!comicId) return null;
-
-  return {
-    ...item,
-    comicId,
-    title: typeof item.title === "string" ? item.title.trim() : "",
-    coverUrl: typeof item.coverUrl === "string" ? item.coverUrl.trim() : "",
-    sourceName: typeof item.sourceName === "string" ? item.sourceName.trim() : "",
-    lastChapterNumber:
-      typeof item.lastChapterNumber === "string" || typeof item.lastChapterNumber === "number"
-        ? item.lastChapterNumber
-        : "",
-    lastChapterTitle:
-      typeof item.lastChapterTitle === "string" ? item.lastChapterTitle.trim() : "",
-    lastPage: typeof item.lastPage === "number" ? item.lastPage : 1,
-    updatedAt:
-      typeof item.updatedAt === "number" || typeof item.updatedAt === "string"
-        ? item.updatedAt
-        : Date.now(),
-  };
-}
-
 export async function POST(request: Request) {
   const authorization = await authorizeExternalApiRequest(request);
   if (!authorization.authorized) return authorization.response;
@@ -181,7 +286,14 @@ export async function POST(request: Request) {
     );
   }
 
-  const uid = typeof body.uid === "string" ? body.uid.trim() : "";
+  // 1. Ekstrak UID secara fleksibel
+  const uid = (
+    typeof body.uid === "string" ? body.uid :
+    typeof body.userId === "string" ? body.userId :
+    typeof body.user_id === "string" ? body.user_id :
+    typeof body.id === "string" ? body.id : ""
+  ).trim();
+
   if (!uid) {
     return NextResponse.json(
       { success: false, error: "uid is required" },
@@ -189,27 +301,30 @@ export async function POST(request: Request) {
     );
   }
 
-  if (body.library !== undefined && !Array.isArray(body.library)) {
-    return NextResponse.json(
-      { success: false, error: "library must be an array" },
-      { status: 400 }
-    );
-  }
+  // 2. Terima library/pustaka/bookmarks secara fleksibel
+  const rawLibrary =
+    Array.isArray(body.library) ? body.library :
+    Array.isArray(body.pustaka) ? body.pustaka :
+    Array.isArray(body.bookmarks) ? body.bookmarks :
+    Array.isArray(body.bookmark) ? body.bookmark :
+    Array.isArray(body.koleksi) ? body.koleksi :
+    [];
 
-  if (body.history !== undefined && !Array.isArray(body.history)) {
-    return NextResponse.json(
-      { success: false, error: "history must be an array" },
-      { status: 400 }
-    );
-  }
+  // 3. Terima history/riwayat secara fleksibel
+  const rawHistory =
+    Array.isArray(body.history) ? body.history :
+    Array.isArray(body.riwayat) ? body.riwayat :
+    Array.isArray(body.readingHistory) ? body.readingHistory :
+    Array.isArray(body.baca) ? body.baca :
+    [];
 
-  const incomingLibrary: ComicBookmark[] = Array.isArray(body.library)
-    ? (body.library.map(sanitizeLibraryItem).filter(Boolean) as ComicBookmark[])
-    : [];
+  const incomingLibrary: ComicBookmark[] = rawLibrary
+    .map(sanitizeLibraryItem)
+    .filter(Boolean) as ComicBookmark[];
 
-  const incomingHistory: ReadingHistory[] = Array.isArray(body.history)
-    ? (body.history.map(sanitizeHistoryItem).filter(Boolean) as ReadingHistory[])
-    : [];
+  const incomingHistory: ReadingHistory[] = rawHistory
+    .map(sanitizeHistoryItem)
+    .filter(Boolean) as ReadingHistory[];
 
   try {
     const userRef = doc(db, "USERS", uid);
@@ -230,24 +345,46 @@ export async function POST(request: Request) {
       }
     }
 
+    // Ambil data yang sudah ada di sub-collection sync_data/backup
     const backupRef = doc(db, "USERS", uid, "sync_data", "backup");
     const existingBackupSnap = await getDoc(backupRef);
-    const existingData = existingBackupSnap.exists() ? existingBackupSnap.data() : null;
+    const existingBackupData = existingBackupSnap.exists() ? existingBackupSnap.data() : null;
 
-    const existingLibrary: ComicBookmark[] =
-      existingData && Array.isArray(existingData.library)
-        ? (existingData.library.map(sanitizeLibraryItem).filter(Boolean) as ComicBookmark[])
+    // Fallback: cek dokumen USERS/{uid} jika sub-collection belum pernah dibuat
+    const existingUserData = userSnap.exists() ? userSnap.data() : null;
+
+    const existingLibrarySource =
+      existingBackupData && Array.isArray(existingBackupData.library)
+        ? existingBackupData.library
+        : existingUserData && Array.isArray(existingUserData.library)
+        ? existingUserData.library
+        : existingUserData && Array.isArray(existingUserData.pustaka)
+        ? existingUserData.pustaka
         : [];
 
-    const existingHistory: ReadingHistory[] =
-      existingData && Array.isArray(existingData.history)
-        ? (existingData.history.map(sanitizeHistoryItem).filter(Boolean) as ReadingHistory[])
+    const existingHistorySource =
+      existingBackupData && Array.isArray(existingBackupData.history)
+        ? existingBackupData.history
+        : existingUserData && Array.isArray(existingUserData.history)
+        ? existingUserData.history
+        : existingUserData && Array.isArray(existingUserData.riwayat)
+        ? existingUserData.riwayat
         : [];
 
+    const existingLibrary: ComicBookmark[] = existingLibrarySource
+      .map(sanitizeLibraryItem)
+      .filter(Boolean) as ComicBookmark[];
+
+    const existingHistory: ReadingHistory[] = existingHistorySource
+      .map(sanitizeHistoryItem)
+      .filter(Boolean) as ReadingHistory[];
+
+    // Merge data baru dengan data lama berbasis timestamp
     const mergedLibrary = mergeLibrary(existingLibrary, incomingLibrary);
     const mergedHistory = mergeHistory(existingHistory, incomingHistory);
     const lastSyncedAt = new Date().toISOString();
 
+    // Simpan eksplisit ke sub-collection USERS/{uid}/sync_data/backup
     await setDoc(
       backupRef,
       {
@@ -262,14 +399,24 @@ export async function POST(request: Request) {
       { merge: true }
     );
 
+    // Simpan juga ringkasan & data langsung ke dokumen induk USERS/{uid}
     await setDoc(
       userRef,
       {
+        uid,
         lastSyncedAt,
         libraryCount: mergedLibrary.length,
         historyCount: mergedHistory.length,
+        library: mergedLibrary,
+        history: mergedHistory,
+        updatedAt: serverTimestamp(),
       },
       { merge: true }
+    );
+
+    // Logging terminal untuk mempermudah debugging
+    console.log(
+      `[Cloud Sync POST] uid=${uid} | Diterima: Library=${rawLibrary.length}, History=${rawHistory.length} | Disimpan (Merged): Library=${mergedLibrary.length}, History=${mergedHistory.length} => USERS/${uid}/sync_data/backup & USERS/${uid}`
     );
 
     return NextResponse.json(
@@ -282,7 +429,7 @@ export async function POST(request: Request) {
       { status: 200 }
     );
   } catch (error) {
-    console.error("Sync backup failed", error);
+    console.error(`[Cloud Sync POST Error] uid=${uid}:`, error);
     return NextResponse.json(
       { success: false, error: "Firebase service is unavailable" },
       { status: 502 }
@@ -295,7 +442,7 @@ export async function GET(request: Request) {
   if (!authorization.authorized) return authorization.response;
 
   const { searchParams } = new URL(request.url);
-  const uid = searchParams.get("uid")?.trim();
+  const uid = searchParams.get("uid")?.trim() || searchParams.get("userId")?.trim();
 
   if (!uid) {
     return NextResponse.json(
@@ -323,30 +470,65 @@ export async function GET(request: Request) {
       }
     }
 
+    // 1. Coba baca dari sub-collection USERS/{uid}/sync_data/backup
     const backupRef = doc(db, "USERS", uid, "sync_data", "backup");
     const backupSnap = await getDoc(backupRef);
 
-    if (!backupSnap.exists()) {
-      return NextResponse.json({
-        success: true,
-        uid,
-        library: [],
-        history: [],
-        lastSyncedAt: null,
-      });
+    let rawLibrary: unknown[] = [];
+    let rawHistory: unknown[] = [];
+    let lastSyncedAt: string | null = null;
+
+    if (backupSnap.exists()) {
+      const backupData = backupSnap.data() || {};
+      rawLibrary = Array.isArray(backupData.library)
+        ? backupData.library
+        : Array.isArray(backupData.pustaka)
+        ? backupData.pustaka
+        : [];
+      rawHistory = Array.isArray(backupData.history)
+        ? backupData.history
+        : Array.isArray(backupData.riwayat)
+        ? backupData.riwayat
+        : [];
+      lastSyncedAt = typeof backupData.lastSyncedAt === "string" ? backupData.lastSyncedAt : null;
     }
 
-    const backupData = backupSnap.data() || {};
+    // 2. Fallback jika sub-collection kosong: baca dari dokumen induk USERS/{uid}
+    if (rawLibrary.length === 0 && rawHistory.length === 0 && userSnap.exists()) {
+      const userData = userSnap.data() || {};
+      rawLibrary = Array.isArray(userData.library)
+        ? userData.library
+        : Array.isArray(userData.pustaka)
+        ? userData.pustaka
+        : Array.isArray(userData.bookmarks)
+        ? userData.bookmarks
+        : [];
+      rawHistory = Array.isArray(userData.history)
+        ? userData.history
+        : Array.isArray(userData.riwayat)
+        ? userData.riwayat
+        : [];
+      if (!lastSyncedAt && typeof userData.lastSyncedAt === "string") {
+        lastSyncedAt = userData.lastSyncedAt;
+      }
+    }
+
+    const cleanLibrary = rawLibrary.map(sanitizeLibraryItem).filter(Boolean);
+    const cleanHistory = rawHistory.map(sanitizeHistoryItem).filter(Boolean);
+
+    console.log(
+      `[Cloud Sync GET] uid=${uid} => Dikembalikan: Library=${cleanLibrary.length}, History=${cleanHistory.length}, lastSyncedAt=${lastSyncedAt}`
+    );
 
     return NextResponse.json({
       success: true,
       uid,
-      library: Array.isArray(backupData.library) ? backupData.library : [],
-      history: Array.isArray(backupData.history) ? backupData.history : [],
-      lastSyncedAt: backupData.lastSyncedAt || null,
+      library: cleanLibrary,
+      history: cleanHistory,
+      lastSyncedAt,
     });
   } catch (error) {
-    console.error("Sync restore failed", error);
+    console.error(`[Cloud Sync GET Error] uid=${uid}:`, error);
     return NextResponse.json(
       { success: false, error: "Firebase service is unavailable" },
       { status: 502 }

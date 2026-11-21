@@ -453,11 +453,11 @@ export default function SettingPages() {
                 </div>
 
                 <label className="block text-sm text-slate-300">
-                  URL Download APK Terbaru
+                  URL / Path Download APK Terbaru
                   <input
-                    type="url"
+                    type="text"
                     value={settings.appUpdate?.downloadUrl ?? ""}
-                    placeholder="https://github.com/.../releases/download/v1.1.0/app-release.apk"
+                    placeholder="/aplikasi/Komryuu.apk atau https://domain.com/Komryuu.apk"
                     onChange={(event) => updateAppUpdate({ downloadUrl: event.target.value })}
                     onBlur={() => {
                       const url = (settingsRef.current.appUpdate?.downloadUrl || "").trim();
@@ -465,7 +465,7 @@ export default function SettingPages() {
                     }}
                     className={inputClass}
                   />
-                  <span className="mt-1 block text-xs text-slate-500">Link langsung saat user menekan tombol &quot;Update Sekarang&quot;.</span>
+                  <span className="mt-1 block text-xs text-slate-500">Link langsung file APK (bisa path lokal publik seperti &apos;/aplikasi/Komryuu.apk&apos; atau link eksternal).</span>
                 </label>
 
                 <label className="block text-sm text-slate-300">
