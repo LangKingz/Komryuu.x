@@ -17,20 +17,74 @@ import {
 
 type UserProfile = {
   id: string;
+  uid?: string;
   email: string;
   name: string;
+  photoUrl?: string;
+  provider?: string;
+  role?: string;
+  permissions?: unknown;
   status: string;
+  isBanned?: boolean;
+  banReason?: string;
+  deviceInfo?: unknown;
+  libraryCount: number;
+  historyCount: number;
+  lastSyncedAt?: string | null;
+  library?: unknown[];
+  history?: unknown[];
   createdAt?: string;
+  lastLoginAt?: string;
 };
 
 function toUserProfile(data: Record<string, unknown>): UserProfile {
+  const rawLib = data.library || data.pustaka || data.bookmarks || data.bookmark || data.koleksi;
+  const rawHist = data.history || data.riwayat || data.readingHistory || data.baca;
+  const library = Array.isArray(rawLib) ? rawLib : [];
+  const history = Array.isArray(rawHist) ? rawHist : [];
+
+  const libraryCount =
+    typeof data.libraryCount === "number"
+      ? data.libraryCount
+      : library.length;
+
+  const historyCount =
+    typeof data.historyCount === "number"
+      ? data.historyCount
+      : history.length;
+
+  const isBanned = data.isBanned === true;
+  const status = isBanned ? "banned" : typeof data.status === "string" ? data.status : "active";
+
   return {
-    id: typeof data.id === "string" ? data.id : "",
+    id: typeof data.id === "string" ? data.id : typeof data.uid === "string" ? data.uid : "",
+    uid: typeof data.uid === "string" ? data.uid : typeof data.id === "string" ? data.id : "",
     email: typeof data.email === "string" ? data.email : "",
     name: typeof data.name === "string" ? data.name : "",
-    status: typeof data.status === "string" ? data.status : "active",
+    ...(typeof data.photoUrl === "string" ? { photoUrl: data.photoUrl } : {}),
+    ...(typeof data.provider === "string" ? { provider: data.provider } : {}),
+    role: typeof data.role === "string" ? data.role : "user",
+    ...(data.permissions ? { permissions: data.permissions } : {}),
+    status,
+    isBanned,
+    ...(typeof data.banReason === "string" ? { banReason: data.banReason } : {}),
+    ...(data.deviceInfo ? { deviceInfo: data.deviceInfo } : {}),
+    libraryCount,
+    historyCount,
+    lastSyncedAt: typeof data.lastSyncedAt === "string" ? data.lastSyncedAt : null,
+    library,
+    history,
     ...(typeof data.createdAt === "string" ? { createdAt: data.createdAt } : {}),
+    ...(data.lastLoginAt ? { lastLoginAt: String(data.lastLoginAt) } : {}),
   };
+}
+
+async function findUserDoc(id: string): Promise<{ doc: Record<string, unknown>; collectionName: string } | null> {
+  const upper = await getFirestoreDocument(`USERS/${id}`);
+  if (upper) return { doc: upper, collectionName: "USERS" };
+  const lower = await getFirestoreDocument(`users/${id}`);
+  if (lower) return { doc: lower, collectionName: "users" };
+  return null;
 }
 
 function isValidEmail(email: string): boolean {
@@ -83,20 +137,27 @@ export async function GET(request: Request) {
 
   try {
     if (id) {
-      const document = await getFirestoreDocument(`users/${id}`);
-      if (!document) {
+      const found = await findUserDoc(id);
+      if (!found) {
         return NextResponse.json({ success: false, error: "User not found" }, { status: 404 });
       }
       return NextResponse.json({
         success: true,
-        data: toUserProfile(document),
+        data: toUserProfile(found.doc),
         ...externalApiMetadata(authorization.settings),
       });
     }
 
-    const documents = email
-      ? await queryFirestoreDocuments("users", "email", email, limit)
-      : await listFirestoreDocuments("users", limit);
+    let documents = email
+      ? await queryFirestoreDocuments("USERS", "email", email, limit)
+      : await listFirestoreDocuments("USERS", limit);
+
+    if (documents.length === 0) {
+      documents = email
+        ? await queryFirestoreDocuments("users", "email", email, limit)
+        : await listFirestoreDocuments("users", limit);
+    }
+
     const users = documents.map(toUserProfile);
     return NextResponse.json({
       success: true,
@@ -138,7 +199,10 @@ export async function POST(request: Request) {
     if (password.length < 8 || password.length > 128) {
       return NextResponse.json({ success: false, error: "password must be between 8 and 128 characters" }, { status: 400 });
     }
-    if ((await queryFirestoreDocuments("users", "email", email, 1)).length > 0) {
+
+    const existingUsers = await queryFirestoreDocuments("USERS", "email", email, 1);
+    const existingLegacy = existingUsers.length === 0 ? await queryFirestoreDocuments("users", "email", email, 1) : [];
+    if (existingUsers.length > 0 || existingLegacy.length > 0) {
       return NextResponse.json({ success: false, error: "Email is already registered" }, { status: 409 });
     }
 
@@ -146,17 +210,24 @@ export async function POST(request: Request) {
     const credentials = hashPassword(password);
     const createdAt = new Date().toISOString();
     const newUser = {
+      uid: id,
       email,
       name,
       status: "active",
+      role: "user",
+      library: [],
+      history: [],
+      libraryCount: 0,
+      historyCount: 0,
+      lastSyncedAt: null,
       ...credentials,
       createdAt,
     };
-    await createFirestoreDocument("users", id, newUser);
+    await createFirestoreDocument("USERS", id, newUser);
 
     return NextResponse.json({
       success: true,
-      data: { id, email, name, status: "active", createdAt },
+      data: toUserProfile({ ...newUser, id }),
       ...externalApiMetadata(authorization.settings),
     }, { status: 201 });
   } catch (error) {
@@ -211,16 +282,20 @@ export async function PUT(request: Request) {
       return NextResponse.json({ success: false, error: "At least one editable field is required" }, { status: 400 });
     }
 
-    const current = await getFirestoreDocument(`users/${id}`);
-    if (!current) return NextResponse.json({ success: false, error: "User not found" }, { status: 404 });
+    const found = await findUserDoc(id);
+    if (!found) return NextResponse.json({ success: false, error: "User not found" }, { status: 404 });
+    const current = found.doc;
+
     if (typeof updates.email === "string") {
-      const duplicate = await queryFirestoreDocuments("users", "email", updates.email, 1);
-      if (duplicate.some((user) => user.id !== id)) {
+      const duplicateUsers = await queryFirestoreDocuments("USERS", "email", updates.email, 1);
+      const duplicateLegacy = duplicateUsers.length === 0 ? await queryFirestoreDocuments("users", "email", updates.email, 1) : [];
+      const duplicates = [...duplicateUsers, ...duplicateLegacy];
+      if (duplicates.some((user) => user.id !== id)) {
         return NextResponse.json({ success: false, error: "Email is already registered" }, { status: 409 });
       }
     }
 
-    await updateFirestoreDocument("users", id, updates);
+    await updateFirestoreDocument(found.collectionName, id, updates);
     return NextResponse.json({
       success: true,
       data: toUserProfile({ ...current, ...updates, id }),
@@ -243,9 +318,9 @@ export async function DELETE(request: Request) {
   if (!id) return NextResponse.json({ success: false, error: "id is required" }, { status: 400 });
 
   try {
-    const current = await getFirestoreDocument(`users/${id}`);
-    if (!current) return NextResponse.json({ success: false, error: "User not found" }, { status: 404 });
-    await deleteFirestoreDocument("users", id);
+    const found = await findUserDoc(id);
+    if (!found) return NextResponse.json({ success: false, error: "User not found" }, { status: 404 });
+    await deleteFirestoreDocument(found.collectionName, id);
     return NextResponse.json({ success: true, id });
   } catch (error) {
     return failureResponse(error, "delete user");

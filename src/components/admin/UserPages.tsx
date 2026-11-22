@@ -126,6 +126,8 @@ type UserRecord = {
   lastSyncedAt?: unknown;
   rawLibrary?: unknown;
   rawHistory?: unknown;
+  library?: ComicBookmark[];
+  history?: ReadingHistory[];
   createdAt: unknown;
   lastLoginAt: unknown;
 };
@@ -151,26 +153,42 @@ function parseDate(value: unknown): Date | null {
   return null;
 }
 
+function formatSafeDate(value: unknown): string {
+  const d = parseDate(value);
+  if (!d) return "Belum pernah";
+  return d.toLocaleString("id-ID", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function normalizeComicBookmark(item: unknown): ComicBookmark | null {
   if (!item || typeof item !== "object") return null;
   const rec = item as Record<string, unknown>;
 
-  const comicId = String(
-    rec.comicId || rec.comic_id || rec.id || rec.komikId || rec.mangaId || ""
+  const title = String(
+    rec.title || rec.judul || rec.comicTitle || rec.name || rec.nama || rec.judulKomik || ""
   ).trim();
 
-  const title = String(
-    rec.title || rec.judul || rec.comicTitle || rec.name || rec.judulKomik || ""
+  let comicId = String(
+    rec.comicId || rec.comic_id || rec.id || rec.link || rec.url || rec.comicUrl || rec.komikId || rec.mangaId || rec.slug || ""
   ).trim();
+
+  if (!comicId && title && title !== "Tanpa Judul") {
+    comicId = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  }
 
   if (!comicId && !title) return null;
 
   const coverUrl = String(
-    rec.coverUrl || rec.cover_url || rec.cover || rec.gambar || rec.thumbnail || rec.image || rec.foto || ""
+    rec.coverUrl || rec.cover_url || rec.cover || rec.gambar || rec.thumbnail || rec.thumb || rec.image || rec.img || rec.foto || ""
   ).trim();
 
   const sourceName = String(
-    rec.sourceName || rec.source_name || rec.source || rec.sumber || rec.extensionName || "Komik"
+    rec.sourceName || rec.source_name || rec.source || rec.sumber || rec.extensionName || rec.ext || "Komik"
   ).trim();
 
   const status = String(rec.status || rec.state || "").trim();
@@ -200,22 +218,26 @@ function normalizeReadingHistory(item: unknown): ReadingHistory | null {
   if (!item || typeof item !== "object") return null;
   const rec = item as Record<string, unknown>;
 
-  const comicId = String(
-    rec.comicId || rec.comic_id || rec.id || rec.komikId || rec.mangaId || ""
+  const title = String(
+    rec.title || rec.judul || rec.comicTitle || rec.name || rec.nama || rec.judulKomik || ""
   ).trim();
 
-  const title = String(
-    rec.title || rec.judul || rec.comicTitle || rec.name || rec.judulKomik || ""
+  let comicId = String(
+    rec.comicId || rec.comic_id || rec.id || rec.link || rec.url || rec.comicUrl || rec.komikId || rec.mangaId || rec.slug || ""
   ).trim();
+
+  if (!comicId && title && title !== "Tanpa Judul") {
+    comicId = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  }
 
   if (!comicId && !title) return null;
 
   const coverUrl = String(
-    rec.coverUrl || rec.cover_url || rec.cover || rec.gambar || rec.thumbnail || rec.image || rec.foto || ""
+    rec.coverUrl || rec.cover_url || rec.cover || rec.gambar || rec.thumbnail || rec.thumb || rec.image || rec.img || rec.foto || ""
   ).trim();
 
   const sourceName = String(
-    rec.sourceName || rec.source_name || rec.source || rec.sumber || rec.extensionName || "Komik"
+    rec.sourceName || rec.source_name || rec.source || rec.sumber || rec.extensionName || rec.ext || "Komik"
   ).trim();
 
   const lastChapterNumber =
@@ -227,12 +249,18 @@ function normalizeReadingHistory(item: unknown): ReadingHistory | null {
       ? rec.chapter
       : rec.lastChapter !== undefined
       ? rec.lastChapter
+      : rec.last_chapter !== undefined
+      ? rec.last_chapter
+      : rec.chapterNumber !== undefined
+      ? rec.chapterNumber
       : rec.bab !== undefined
       ? rec.bab
+      : rec.nomorBab !== undefined
+      ? rec.nomorBab
       : "-";
 
   const lastChapterTitle = String(
-    rec.lastChapterTitle || rec.last_chapter_title || rec.chapterTitle || rec.judulChapter || ""
+    rec.lastChapterTitle || rec.last_chapter_title || rec.chapterTitle || rec.judulChapter || rec.judul_bab || rec.chapterName || ""
   ).trim();
 
   const lastPage = Number(rec.lastPage || rec.last_page || rec.page || rec.halaman || 0);
@@ -302,19 +330,23 @@ function toUser(id: string, data: Record<string, unknown>): UserRecord {
   const rawLib = data.library || data.pustaka || data.bookmarks || data.bookmark || data.koleksi;
   const rawHist = data.history || data.riwayat || data.readingHistory || data.baca;
 
+  const library = Array.isArray(rawLib)
+    ? (rawLib.map(normalizeComicBookmark).filter((i): i is ComicBookmark => i !== null) as ComicBookmark[])
+    : [];
+
+  const history = Array.isArray(rawHist)
+    ? (rawHist.map(normalizeReadingHistory).filter((i): i is ReadingHistory => i !== null) as ReadingHistory[])
+    : [];
+
   const libraryCount =
     typeof data.libraryCount === "number"
       ? data.libraryCount
-      : Array.isArray(rawLib)
-      ? rawLib.length
-      : undefined;
+      : library.length;
 
   const historyCount =
     typeof data.historyCount === "number"
       ? data.historyCount
-      : Array.isArray(rawHist)
-      ? rawHist.length
-      : undefined;
+      : history.length;
 
   return {
     id,
@@ -338,6 +370,8 @@ function toUser(id: string, data: Record<string, unknown>): UserRecord {
     lastSyncedAt: data.lastSyncedAt || data.updatedAt,
     rawLibrary: rawLib,
     rawHistory: rawHist,
+    library,
+    history,
     createdAt: data.createdAt,
     lastLoginAt: data.lastLoginAt,
   };
@@ -481,17 +515,31 @@ export default function UserPages() {
     setTargetPermissions({ ...user.permissions });
 
     if (type === "sync") {
-      setSyncLoading(true);
-      setSyncData(null);
       setSyncTab("library");
       setSyncSearch("");
+
+      // 1. Membaca data langsung dari user.library & user.history di dokumen USERS/{uid}
+      const directLibrary = Array.isArray(user.library) && user.library.length > 0 ? user.library : [];
+      const directHistory = Array.isArray(user.history) && user.history.length > 0 ? user.history : [];
+
+      if (directLibrary.length > 0 || directHistory.length > 0) {
+        setSyncData({
+          library: directLibrary,
+          history: directHistory,
+          lastSyncedAt: typeof user.lastSyncedAt === "string" ? user.lastSyncedAt : user.lastSyncedAt ? parseDate(user.lastSyncedAt)?.toISOString() || null : null,
+        });
+        setSyncLoading(false);
+      } else {
+        setSyncLoading(true);
+        setSyncData(null);
+      }
+
+      // 2. Sekaligus melakukan fallback fetch ke sub-collection USERS/{uid}/sync_data/backup
       void loadUserSyncData(user);
     }
   }
 
   async function loadUserSyncData(user: UserRecord) {
-    setSyncLoading(true);
-    setSyncData(null);
     try {
       const candidates = Array.from(new Set([user.uid, user.id].filter(Boolean))) as string[];
       let foundBackup: {
@@ -583,11 +631,11 @@ export default function UserPages() {
         }
       }
 
-      // 4. Fallback ke properti user di memori
-      if (!foundBackup && (Array.isArray(user.rawLibrary) || Array.isArray(user.rawHistory))) {
+      // 4. Fallback ke data user di memori yang sudah menempel di dokumen USERS
+      if (!foundBackup && (user.library?.length || user.history?.length || Array.isArray(user.rawLibrary) || Array.isArray(user.rawHistory))) {
         foundBackup = {
-          library: Array.isArray(user.rawLibrary) ? (user.rawLibrary as unknown[]) : [],
-          history: Array.isArray(user.rawHistory) ? (user.rawHistory as unknown[]) : [],
+          library: (user.library && user.library.length > 0) ? user.library : Array.isArray(user.rawLibrary) ? (user.rawLibrary as unknown[]) : [],
+          history: (user.history && user.history.length > 0) ? user.history : Array.isArray(user.rawHistory) ? (user.rawHistory as unknown[]) : [],
           lastSyncedAt: user.lastSyncedAt,
         };
       }
@@ -615,20 +663,18 @@ export default function UserPages() {
           lastSyncedAt: lastSyncedString,
         });
       } else {
-        console.log(`[UserSync] Tidak ada data sync untuk user:`, candidates);
-        setSyncData({
-          library: [],
-          history: [],
+        setSyncData((prev) => prev ?? {
+          library: user.library || [],
+          history: user.history || [],
           lastSyncedAt: typeof user.lastSyncedAt === "string" ? user.lastSyncedAt : null,
         });
       }
     } catch (err) {
       console.error("Load sync data failed", err);
-      setToast({ kind: "error", message: "Gagal memuat data koleksi dan riwayat user." });
-      setSyncData({
-        library: [],
-        history: [],
-        lastSyncedAt: null,
+      setSyncData((prev) => prev ?? {
+        library: user.library || [],
+        history: user.history || [],
+        lastSyncedAt: typeof user.lastSyncedAt === "string" ? user.lastSyncedAt : null,
       });
     } finally {
       setSyncLoading(false);
@@ -1183,10 +1229,10 @@ export default function UserPages() {
                   <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.07] bg-[#14141e] p-3 text-xs">
                     <div className="flex flex-wrap items-center gap-4 text-slate-300">
                       <span>
-                        Pustaka: <strong className="text-sky-300">{syncData?.library.length || 0}</strong> komik
+                        Pustaka: <strong className="text-sky-300">{syncData?.library.length ?? selected?.libraryCount ?? 0}</strong> komik
                       </span>
                       <span>
-                        Riwayat: <strong className="text-violet-300">{syncData?.history.length || 0}</strong> dibaca
+                        Riwayat: <strong className="text-violet-300">{syncData?.history.length ?? selected?.historyCount ?? 0}</strong> dibaca
                       </span>
                       {selected && (
                         <span className="text-slate-500 font-mono text-[11px]">
@@ -1198,9 +1244,9 @@ export default function UserPages() {
                       <ClockCounterClockwise size={14} />
                       <span>
                         Terakhir sinkron:{" "}
-                        {syncData?.lastSyncedAt
-                          ? new Date(syncData.lastSyncedAt).toLocaleString("id-ID")
-                          : "Belum pernah"}
+                        <strong className="text-slate-200">
+                          {formatSafeDate(syncData?.lastSyncedAt || selected?.lastSyncedAt)}
+                        </strong>
                       </span>
                     </div>
                   </div>

@@ -55,24 +55,34 @@ function parseTimestamp(val: unknown): number {
 function sanitizeLibraryItem(item: unknown): ComicBookmark | null {
   if (!isRecord(item)) return null;
 
-  const comicId = (
-    typeof item.comicId === "string" ? item.comicId :
-    typeof item.comic_id === "string" ? item.comic_id :
-    typeof item.id === "string" ? item.id :
-    typeof item.komikId === "string" ? item.komikId :
-    typeof item.mangaId === "string" ? item.mangaId : ""
-  ).trim();
-
-  if (!comicId) return null;
-
   const title = (
     typeof item.title === "string" ? item.title :
     typeof item.judul === "string" ? item.judul :
     typeof item.comicTitle === "string" ? item.comicTitle :
     typeof item.name === "string" ? item.name :
+    typeof item.nama === "string" ? item.nama :
     typeof item.judulKomik === "string" ? item.judulKomik :
     "Tanpa Judul"
   ).trim();
+
+  let comicId = (
+    typeof item.comicId === "string" ? item.comicId :
+    typeof item.comic_id === "string" ? item.comic_id :
+    typeof item.id === "string" ? item.id :
+    typeof item.link === "string" ? item.link :
+    typeof item.url === "string" ? item.url :
+    typeof item.comicUrl === "string" ? item.comicUrl :
+    typeof item.comic_url === "string" ? item.comic_url :
+    typeof item.komikId === "string" ? item.komikId :
+    typeof item.mangaId === "string" ? item.mangaId :
+    typeof item.slug === "string" ? item.slug : ""
+  ).trim();
+
+  if (!comicId && title && title !== "Tanpa Judul") {
+    comicId = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  }
+
+  if (!comicId) return null;
 
   const coverUrl = (
     typeof item.coverUrl === "string" ? item.coverUrl :
@@ -80,7 +90,9 @@ function sanitizeLibraryItem(item: unknown): ComicBookmark | null {
     typeof item.cover === "string" ? item.cover :
     typeof item.gambar === "string" ? item.gambar :
     typeof item.thumbnail === "string" ? item.thumbnail :
+    typeof item.thumb === "string" ? item.thumb :
     typeof item.image === "string" ? item.image :
+    typeof item.img === "string" ? item.img :
     typeof item.foto === "string" ? item.foto : ""
   ).trim();
 
@@ -90,6 +102,7 @@ function sanitizeLibraryItem(item: unknown): ComicBookmark | null {
     typeof item.source === "string" ? item.source :
     typeof item.sumber === "string" ? item.sumber :
     typeof item.extensionName === "string" ? item.extensionName :
+    typeof item.ext === "string" ? item.ext :
     "Komik"
   ).trim();
 
@@ -119,24 +132,34 @@ function sanitizeLibraryItem(item: unknown): ComicBookmark | null {
 function sanitizeHistoryItem(item: unknown): ReadingHistory | null {
   if (!isRecord(item)) return null;
 
-  const comicId = (
-    typeof item.comicId === "string" ? item.comicId :
-    typeof item.comic_id === "string" ? item.comic_id :
-    typeof item.id === "string" ? item.id :
-    typeof item.komikId === "string" ? item.komikId :
-    typeof item.mangaId === "string" ? item.mangaId : ""
-  ).trim();
-
-  if (!comicId) return null;
-
   const title = (
     typeof item.title === "string" ? item.title :
     typeof item.judul === "string" ? item.judul :
     typeof item.comicTitle === "string" ? item.comicTitle :
     typeof item.name === "string" ? item.name :
+    typeof item.nama === "string" ? item.nama :
     typeof item.judulKomik === "string" ? item.judulKomik :
     "Tanpa Judul"
   ).trim();
+
+  let comicId = (
+    typeof item.comicId === "string" ? item.comicId :
+    typeof item.comic_id === "string" ? item.comic_id :
+    typeof item.id === "string" ? item.id :
+    typeof item.link === "string" ? item.link :
+    typeof item.url === "string" ? item.url :
+    typeof item.comicUrl === "string" ? item.comicUrl :
+    typeof item.comic_url === "string" ? item.comic_url :
+    typeof item.komikId === "string" ? item.komikId :
+    typeof item.mangaId === "string" ? item.mangaId :
+    typeof item.slug === "string" ? item.slug : ""
+  ).trim();
+
+  if (!comicId && title && title !== "Tanpa Judul") {
+    comicId = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  }
+
+  if (!comicId) return null;
 
   const coverUrl = (
     typeof item.coverUrl === "string" ? item.coverUrl :
@@ -144,7 +167,9 @@ function sanitizeHistoryItem(item: unknown): ReadingHistory | null {
     typeof item.cover === "string" ? item.cover :
     typeof item.gambar === "string" ? item.gambar :
     typeof item.thumbnail === "string" ? item.thumbnail :
+    typeof item.thumb === "string" ? item.thumb :
     typeof item.image === "string" ? item.image :
+    typeof item.img === "string" ? item.img :
     typeof item.foto === "string" ? item.foto : ""
   ).trim();
 
@@ -154,6 +179,7 @@ function sanitizeHistoryItem(item: unknown): ReadingHistory | null {
     typeof item.source === "string" ? item.source :
     typeof item.sumber === "string" ? item.sumber :
     typeof item.extensionName === "string" ? item.extensionName :
+    typeof item.ext === "string" ? item.ext :
     "Komik"
   ).trim();
 
@@ -162,16 +188,19 @@ function sanitizeHistoryItem(item: unknown): ReadingHistory | null {
     item.last_chapter_number !== undefined ? item.last_chapter_number :
     item.chapter !== undefined ? item.chapter :
     item.lastChapter !== undefined ? item.lastChapter :
+    item.last_chapter !== undefined ? item.last_chapter :
     item.chapterNumber !== undefined ? item.chapterNumber :
     item.bab !== undefined ? item.bab :
-    "";
+    item.nomorBab !== undefined ? item.nomorBab :
+    "-";
 
   const lastChapterTitle = (
     typeof item.lastChapterTitle === "string" ? item.lastChapterTitle :
     typeof item.last_chapter_title === "string" ? item.last_chapter_title :
     typeof item.chapterTitle === "string" ? item.chapterTitle :
     typeof item.judulChapter === "string" ? item.judulChapter :
-    typeof item.judul_bab === "string" ? item.judul_bab : ""
+    typeof item.judul_bab === "string" ? item.judul_bab :
+    typeof item.chapterName === "string" ? item.chapterName : ""
   ).trim();
 
   const lastPage =
@@ -194,7 +223,7 @@ function sanitizeHistoryItem(item: unknown): ReadingHistory | null {
     title,
     coverUrl,
     sourceName,
-    lastChapterNumber: typeof lastChapterNumber === "string" || typeof lastChapterNumber === "number" ? lastChapterNumber : "",
+    lastChapterNumber: typeof lastChapterNumber === "string" || typeof lastChapterNumber === "number" ? lastChapterNumber : "-",
     lastChapterTitle,
     lastPage,
     updatedAt: typeof updatedAt === "number" || typeof updatedAt === "string" ? updatedAt : Date.now(),
