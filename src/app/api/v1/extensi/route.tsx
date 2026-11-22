@@ -4,7 +4,9 @@ import { authorizeAdminApiRequest, isRecord } from "@/lib/admin-api";
 import {
   authorizeExternalApiRequest,
   externalApiMetadata,
+  getCurrentAppSettings,
 } from "@/lib/external-api";
+import type { AppSettings } from "@/model/app-settings";
 import {
   createFirestoreDocument,
   deleteFirestoreDocument,
@@ -217,16 +219,34 @@ export async function GET(request: Request) {
     }
   }
 
-  const authorization = await authorizeExternalApiRequest(request);
-  if (!authorization.authorized) return authorization.response;
+  let appSettings: AppSettings | null = null;
+  let cacheTtl = 60;
+  let showNsfw = false;
+
+  const hasApiKey = Boolean(request.headers.get("x-api-key"));
+  if (hasApiKey) {
+    const authorization = await authorizeExternalApiRequest(request);
+    if (!authorization.authorized) return authorization.response;
+    appSettings = authorization.settings;
+    cacheTtl = authorization.settings.extensionCacheTtlSeconds;
+    showNsfw = authorization.settings.showNsfw;
+  } else {
+    try {
+      appSettings = await getCurrentAppSettings();
+      cacheTtl = appSettings.extensionCacheTtlSeconds;
+      showNsfw = appSettings.showNsfw;
+    } catch {
+      // defaults
+    }
+  }
 
   try {
-    const documents = await getCachedExtensions(authorization.settings.extensionCacheTtlSeconds);
+    const documents = await getCachedExtensions(cacheTtl);
     let extensions = documents.filter((extension) => {
       const active = typeof extension.status === "string"
         ? extension.status !== "inactive"
         : extension.isActive !== false;
-      const allowedNsfw = authorization.settings.showNsfw || (extension.nsfw !== true && extension.isNsfw !== true);
+      const allowedNsfw = showNsfw || (extension.nsfw !== true && extension.isNsfw !== true);
       return active && allowedNsfw;
     });
 
@@ -277,7 +297,7 @@ export async function GET(request: Request) {
       message: "Extensions retrieved",
       total,
       data: publicExtensions,
-      ...externalApiMetadata(authorization.settings),
+      ...(appSettings ? externalApiMetadata(appSettings) : {}),
     });
   } catch (error) {
     return failureResponse(error, "retrieve extensions");

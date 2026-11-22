@@ -18,12 +18,29 @@ import {
   Trash,
   X,
 } from "@phosphor-icons/react";
+import {
+  Activity,
+  AlertTriangle,
+  ArrowRightLeft,
+  CheckCircle2,
+  ExternalLink,
+  RefreshCw,
+  XCircle,
+} from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { db } from "@/lib/firebase";
 import { recordAdminActivity } from "@/lib/admin-activity";
 import type { CustomHeaders } from "@/model/extensi";
 
 type ExtensionType = "komik" | "anime" | "cinema";
+
+type HealthStatus = {
+  checking: boolean;
+  ok: boolean;
+  status: number;
+  latencyMs: number;
+  error?: string;
+};
 
 type ExtensionRecord = {
   id: string;
@@ -162,6 +179,10 @@ export default function ExtensiPages() {
   const [search, setSearch] = useState("");
   const [newMirrorInput, setNewMirrorInput] = useState("");
   const [advancedHeadersOpen, setAdvancedHeadersOpen] = useState(false);
+  const [healthMap, setHealthMap] = useState<Record<string, HealthStatus>>({});
+  const [checkingAllHealth, setCheckingAllHealth] = useState(false);
+  const [mirrorModalExt, setMirrorModalExt] = useState<ExtensionRecord | null>(null);
+  const [promotingMirror, setPromotingMirror] = useState(false);
 
   useEffect(() => {
     return onSnapshot(
@@ -381,6 +402,115 @@ export default function ExtensiPages() {
     }
   }
 
+  async function checkExtensionHealth(extension: ExtensionRecord) {
+    const urlToCheck = extension.baseUrl || extension.BaseUrl;
+    if (!urlToCheck) {
+      setToast({ kind: "error", message: `Ekstensi ${extension.name} tidak memiliki Base URL valid.` });
+      return;
+    }
+
+    setHealthMap((prev) => ({
+      ...prev,
+      [extension.id]: { checking: true, ok: false, status: 0, latencyMs: 0 },
+    }));
+
+    try {
+      const res = await fetch("/api/v1/extensi/health", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: urlToCheck,
+          customHeaders: extension.customHeaders,
+        }),
+      });
+
+      const data = await res.json();
+      setHealthMap((prev) => ({
+        ...prev,
+        [extension.id]: {
+          checking: false,
+          ok: Boolean(data.ok),
+          status: typeof data.status === "number" ? data.status : (res.ok ? 200 : res.status),
+          latencyMs: typeof data.latencyMs === "number" ? data.latencyMs : 0,
+          error: data.error || (data.ok ? undefined : (data.statusText || "Connection failed")),
+        },
+      }));
+    } catch (err) {
+      setHealthMap((prev) => ({
+        ...prev,
+        [extension.id]: {
+          checking: false,
+          ok: false,
+          status: 0,
+          latencyMs: 0,
+          error: err instanceof Error ? err.message : "Request failed",
+        },
+      }));
+    }
+  }
+
+  async function checkAllExtensionsHealth() {
+    if (extensions.length === 0) return;
+    setCheckingAllHealth(true);
+    try {
+      await Promise.allSettled(extensions.map((ext) => checkExtensionHealth(ext)));
+      setToast({ kind: "success", message: `Selesai memeriksa kesehatan ${extensions.length} sumber.` });
+    } finally {
+      setCheckingAllHealth(false);
+    }
+  }
+
+  async function handlePromoteMirror(extension: ExtensionRecord, mirrorToPromote: string) {
+    const trimmedMirror = mirrorToPromote.trim();
+    if (!trimmedMirror || !isHttpUrl(trimmedMirror)) {
+      setToast({ kind: "error", message: "URL mirror tidak valid." });
+      return;
+    }
+
+    setPromotingMirror(true);
+    const oldBaseUrl = extension.baseUrl || extension.BaseUrl;
+    const remainingMirrors = extension.mirrorUrls.filter((url) => url !== trimmedMirror);
+    if (oldBaseUrl && !remainingMirrors.includes(oldBaseUrl)) {
+      remainingMirrors.push(oldBaseUrl);
+    }
+
+    try {
+      await updateDoc(doc(db, "EXTENSION", extension.id), {
+        baseUrl: trimmedMirror,
+        BaseUrl: trimmedMirror,
+        mirrorUrls: remainingMirrors,
+        updatedAt: new Date().toISOString(),
+      });
+
+      setToast({
+        kind: "success",
+        message: `Domain utama ${extension.name} berhasil dialihkan ke ${trimmedMirror}.`,
+      });
+      await logActivity(
+        "Promote Mirror URL",
+        `${extension.name}: switch domain ke ${trimmedMirror} (sebelumnya: ${oldBaseUrl})`,
+        extension.id
+      );
+
+      // Otomatis cek kesehatan URL yang baru dipromosikan
+      void checkExtensionHealth({
+        ...extension,
+        baseUrl: trimmedMirror,
+        BaseUrl: trimmedMirror,
+        mirrorUrls: remainingMirrors,
+      });
+
+      setMirrorModalExt(null);
+    } catch (opError) {
+      setToast({
+        kind: "error",
+        message: opError instanceof Error ? opError.message : "Gagal mengalihkan ke mirror.",
+      });
+    } finally {
+      setPromotingMirror(false);
+    }
+  }
+
   const filteredExtensions = extensions.filter((extension) => {
     const query = search.trim().toLowerCase();
     return (
@@ -402,14 +532,25 @@ export default function ExtensiPages() {
               Kelola domain utama, domain mirror cadangan, sakelar live, hak akses VIP, dan override header scrapers.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={openCreateForm}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/30 transition hover:bg-indigo-500"
-          >
-            <Plus size={18} weight="bold" />
-            Tambah Ekstensi
-          </button>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => void checkAllExtensionsHealth()}
+              disabled={checkingAllHealth || extensions.length === 0}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-4 py-2.5 text-sm font-semibold text-indigo-300 backdrop-blur-md transition hover:bg-indigo-500/20 hover:text-white disabled:opacity-50"
+            >
+              <Activity size={18} className={checkingAllHealth ? "animate-spin text-indigo-400" : "text-indigo-400"} />
+              <span>{checkingAllHealth ? "Memeriksa Semua..." : "Cek Kesehatan Semua Sumber"}</span>
+            </button>
+            <button
+              type="button"
+              onClick={openCreateForm}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/30 transition hover:bg-indigo-500"
+            >
+              <Plus size={18} weight="bold" />
+              Tambah Ekstensi
+            </button>
+          </div>
         </header>
 
         {toast && (
@@ -475,7 +616,8 @@ export default function ExtensiPages() {
                     <th className="px-5 py-4">Tipe</th>
                     <th className="px-5 py-4">Status</th>
                     <th className="px-5 py-4">Akses</th>
-                    <th className="px-5 py-4">Domain & Mirror</th>
+                    <th className="px-5 py-4">Domain &amp; Mirror</th>
+                    <th className="px-5 py-4">Kesehatan Sumber</th>
                     <th className="px-5 py-4">Konten</th>
                     <th className="px-5 py-4 text-right">Aksi</th>
                   </tr>
@@ -556,14 +698,75 @@ export default function ExtensiPages() {
                           <p className="truncate font-mono text-xs text-sky-400" title={extension.baseUrl}>
                             {extension.baseUrl || "-"}
                           </p>
-                          {extension.mirrorUrls.length > 0 && (
-                            <p className="mt-1 text-[11px] text-slate-400">
+                          {extension.mirrorUrls.length > 0 ? (
+                            <div className="mt-1 flex items-center gap-2">
                               <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10px] text-slate-300">
                                 +{extension.mirrorUrls.length} mirror
                               </span>
-                            </p>
+                              <button
+                                type="button"
+                                onClick={() => setMirrorModalExt(extension)}
+                                className="inline-flex items-center gap-1 text-[11px] font-medium text-indigo-400 hover:text-indigo-300 underline decoration-indigo-400/50 underline-offset-2 transition"
+                              >
+                                <ArrowRightLeft size={11} />
+                                <span>Pakai Mirror</span>
+                              </button>
+                            </div>
+                          ) : (
+                            <p className="mt-1 text-[11px] text-slate-500">Tanpa mirror</p>
                           )}
                         </div>
+                      </td>
+                      <td className="px-5 py-4">
+                        {(() => {
+                          const health = healthMap[extension.id];
+                          return (
+                            <div className="flex items-center gap-2">
+                              {health?.checking ? (
+                                <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 px-2.5 py-1 text-xs text-indigo-300 font-mono">
+                                  <Activity size={12} className="animate-spin text-indigo-400" />
+                                  Pinging...
+                                </span>
+                              ) : health ? (
+                                health.ok && health.status === 200 ? (
+                                  <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 text-xs text-emerald-400 font-mono">
+                                    <CheckCircle2 size={12} />
+                                    200 OK • {health.latencyMs}ms
+                                  </span>
+                                ) : health.status === 403 ? (
+                                  <span
+                                    className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 text-xs text-amber-300 font-mono"
+                                    title="Cloudflare Protection (403)"
+                                  >
+                                    <AlertTriangle size={12} />
+                                    403 CF • {health.latencyMs}ms
+                                  </span>
+                                ) : (
+                                  <span
+                                    className="inline-flex items-center gap-1.5 rounded-full bg-rose-500/10 border border-rose-500/20 px-2.5 py-1 text-xs text-rose-300 font-mono"
+                                    title={health.error || "Down / Timeout"}
+                                  >
+                                    <XCircle size={12} />
+                                    {health.status ? `${health.status} Error` : "Down / Timeout"}
+                                  </span>
+                                )
+                              ) : (
+                                <span className="text-xs text-slate-500 font-mono">Belum dicek</span>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => void checkExtensionHealth(extension)}
+                                disabled={health?.checking}
+                                aria-label={`Ping ${extension.name}`}
+                                title="Ping domain utama sekarang"
+                                className="rounded-lg border border-white/10 p-1.5 text-slate-400 hover:border-indigo-400 hover:text-indigo-300 transition disabled:opacity-50"
+                              >
+                                <RefreshCw size={12} className={health?.checking ? "animate-spin text-indigo-400" : ""} />
+                              </button>
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-5 py-4">
                         {extension.nsfw ? (
@@ -916,6 +1119,96 @@ export default function ExtensiPages() {
                   </button>
                 </div>
               </form>
+            </section>
+          </div>
+        )}
+        {/* Modal Quick Action "Pakai Mirror URL" */}
+        {mirrorModalExt && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" role="presentation">
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="mirror-modal-title"
+              className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#1c1c28] p-5 shadow-2xl sm:p-6"
+            >
+              <header className="mb-5 flex items-start justify-between">
+                <div>
+                  <h2 id="mirror-modal-title" className="text-lg font-semibold text-white">
+                    Pilih &amp; Alihkan Domain Mirror
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Ganti domain utama <strong className="text-white">{mirrorModalExt.name}</strong> ke URL mirror cadangan secara instan.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Tutup modal"
+                  onClick={() => setMirrorModalExt(null)}
+                  disabled={promotingMirror}
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-white"
+                >
+                  <X size={18} />
+                </button>
+              </header>
+
+              <div className="space-y-4">
+                <div className="rounded-xl border border-white/10 bg-[#14141e] p-3 text-xs">
+                  <span className="text-slate-400">Domain Utama Saat Ini:</span>
+                  <div className="mt-1 flex items-center justify-between">
+                    <span className="font-mono text-sky-300 font-medium truncate max-w-xs">{mirrorModalExt.baseUrl}</span>
+                    {healthMap[mirrorModalExt.id] && (
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-mono ${
+                        healthMap[mirrorModalExt.id].ok ? "bg-emerald-500/10 text-emerald-400" : "bg-rose-500/10 text-rose-300"
+                      }`}>
+                        {healthMap[mirrorModalExt.id].ok ? "Online" : "Issue Detected"}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2.5">
+                    Daftar Mirror Cadangan Tersedia:
+                  </h3>
+                  {mirrorModalExt.mirrorUrls.length === 0 ? (
+                    <p className="text-xs text-slate-500 italic">Tidak ada mirror cadangan terdaftar.</p>
+                  ) : (
+                    <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                      {mirrorModalExt.mirrorUrls.map((mirrorUrl) => (
+                        <div
+                          key={mirrorUrl}
+                          className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-[#14141e] p-3 transition hover:border-indigo-500/30"
+                        >
+                          <div className="min-w-0">
+                            <p className="font-mono text-xs text-white truncate">{mirrorUrl}</p>
+                            <span className="text-[10px] text-slate-400">Mirror Cadangan</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void handlePromoteMirror(mirrorModalExt, mirrorUrl)}
+                            disabled={promotingMirror}
+                            className="flex-shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-md shadow-indigo-600/20 hover:bg-indigo-500 transition disabled:opacity-50"
+                          >
+                            <ArrowRightLeft size={12} />
+                            <span>{promotingMirror ? "Mengalihkan..." : "Jadikan Utama"}</span>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-6 flex justify-end gap-2 border-t border-white/[0.08] pt-4">
+                <button
+                  type="button"
+                  onClick={() => setMirrorModalExt(null)}
+                  disabled={promotingMirror}
+                  className="rounded-xl border border-white/10 px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-white/[0.06] hover:text-white transition"
+                >
+                  Tutup
+                </button>
+              </div>
             </section>
           </div>
         )}

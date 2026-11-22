@@ -7,10 +7,13 @@ import { normalizeAppSettings } from "@/model/app-settings";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  const authorization = await authorizeExternalApiRequest(request, {
-    allowMaintenance: true,
-  });
-  if (!authorization.authorized) return authorization.response;
+  const hasApiKey = Boolean(request.headers.get("x-api-key"));
+  if (hasApiKey) {
+    const authorization = await authorizeExternalApiRequest(request, {
+      allowMaintenance: true,
+    });
+    if (!authorization.authorized) return authorization.response;
+  }
 
   try {
     const configSnap = await getDoc(doc(db, "SETTINGS", "app_config"));

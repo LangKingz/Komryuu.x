@@ -6,7 +6,9 @@ import { collection, doc, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import Hero from "@/components/Hero";
 import {
+  AlertTriangle,
   ArrowRight,
+  Bell,
   BookOpen,
   Check,
   CheckCircle2,
@@ -20,8 +22,10 @@ import {
   Flame,
   Globe,
   HardDrive,
+  Info,
   Layers,
   Lock,
+  Radio,
   RefreshCw,
   Server,
   ShieldCheck,
@@ -29,6 +33,7 @@ import {
   Sparkles,
   Terminal,
   Users,
+  X,
   Zap,
 } from "lucide-react";
 
@@ -40,7 +45,11 @@ interface ExtensionItem {
   type: "komik" | "anime" | "cinema";
   location: string;
   BaseUrl: string;
+  baseUrl?: string;
+  mirrorUrls?: string[];
   status: "active" | "inactive";
+  isActive: boolean;
+  isVipOnly?: boolean;
   nsfw: boolean;
 }
 
@@ -53,7 +62,10 @@ const DEFAULT_EXTENSIONS: ExtensionItem[] = [
     type: "komik",
     location: "Indonesia",
     BaseUrl: "https://shinigami.moe",
+    baseUrl: "https://shinigami.moe",
+    mirrorUrls: ["https://shinigami01.com"],
     status: "active",
+    isActive: true,
     nsfw: false,
   },
   {
@@ -64,7 +76,10 @@ const DEFAULT_EXTENSIONS: ExtensionItem[] = [
     type: "komik",
     location: "Indonesia",
     BaseUrl: "https://ikiru.net",
+    baseUrl: "https://ikiru.net",
+    mirrorUrls: [],
     status: "active",
+    isActive: true,
     nsfw: false,
   },
   {
@@ -75,7 +90,10 @@ const DEFAULT_EXTENSIONS: ExtensionItem[] = [
     type: "komik",
     location: "Indonesia",
     BaseUrl: "https://komikcast.bz",
+    baseUrl: "https://komikcast.bz",
+    mirrorUrls: ["https://komikcast.site"],
     status: "active",
+    isActive: true,
     nsfw: false,
   },
   {
@@ -86,7 +104,10 @@ const DEFAULT_EXTENSIONS: ExtensionItem[] = [
     type: "komik",
     location: "Global",
     BaseUrl: "https://comicscan.org",
+    baseUrl: "https://comicscan.org",
+    mirrorUrls: [],
     status: "active",
+    isActive: true,
     nsfw: false,
   },
 ];
@@ -96,23 +117,85 @@ export default function Home() {
   const [userCount, setUserCount] = useState<number>(128);
   const [loadingStats, setLoadingStats] = useState(true);
   const [activeCategory, setActiveCategory] = useState<string>("all");
+  const [changelogOpen, setChangelogOpen] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
   const [appConfig, setAppConfig] = useState<{
     latestVersion: string;
     downloadUrl: string;
     changelog: string;
     maintenanceMode: boolean;
+    announcement?: {
+      active: boolean;
+      title: string;
+      message: string;
+      type: "info" | "warning" | "update";
+    };
   }>({
     latestVersion: "1.2.0",
     downloadUrl: "/aplikasi/Komryuu.apk",
-    changelog: "Pembaruan v1.2.0: Cloud Sync Firestore, perbaikan scraper Shinigami, dan mode hemat kuota.",
+    changelog: "Pembaruan v1.2.0:\n• Integrasi Cloud Sync Firestore riwayat dan bookmark real-time\n• Auto-healing scraper Shinigami, Ikiru, dan Komikcast\n• Mode offline caching dengan kompresi gambar WebP\n• Remote Extension Manager & mirror fallback server.",
     maintenanceMode: false,
+    announcement: undefined,
   });
 
   const [apiTab, setApiTab] = useState<"sync" | "config">("sync");
 
-  // Real-time listener ke Firestore
+  // Inisialisasi: Fetch REST API awal & Real-time listener ke Firestore
   useEffect(() => {
-    // 1. Listen koleksi EXTENSION
+    // 1. Initial REST API fetch untuk config & extensions
+    fetch("/api/v1/config")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) {
+          setAppConfig((prev) => ({
+            ...prev,
+            latestVersion: data.latestVersion || data.appUpdate?.latestAppVersion || prev.latestVersion,
+            downloadUrl: data.apkUrl || data.appUpdate?.downloadUrl || prev.downloadUrl,
+            changelog: data.changelog || data.appUpdate?.changelog || prev.changelog,
+            maintenanceMode: Boolean(data.maintenanceMode),
+            announcement: data.announcement || (data.broadcastBanner?.isActive ? {
+              active: true,
+              title: data.broadcastBanner.title || "Pengumuman",
+              message: data.broadcastBanner.message || "",
+              type: data.broadcastBanner.type || "info",
+            } : undefined),
+          }));
+        }
+      })
+      .catch((err) => console.warn("Failed fetching /api/v1/config", err));
+
+    fetch("/api/v1/extensi")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.data) && data.data.length > 0) {
+          setExtensions(
+            data.data.map((item: Record<string, unknown>) => {
+              const isActive = item.isActive !== false && item.status !== "inactive";
+              const rawMirrors = Array.isArray(item.mirrorUrls) ? item.mirrorUrls : [];
+              const mirrorUrls = rawMirrors.filter((m): m is string => typeof m === "string");
+              const baseUrl = typeof item.baseUrl === "string" ? item.baseUrl : (typeof item.BaseUrl === "string" ? item.BaseUrl : "");
+              return {
+                id: String(item.id || item.name),
+                name: typeof item.name === "string" ? item.name : "Ekstensi Komik",
+                description: typeof item.description === "string" ? item.description : "",
+                logo: typeof item.logo === "string" ? item.logo : "",
+                type: item.type === "anime" || item.type === "cinema" ? item.type : "komik",
+                location: typeof item.location === "string" ? item.location : "Indonesia",
+                BaseUrl: baseUrl,
+                baseUrl,
+                mirrorUrls,
+                status: isActive ? "active" : "inactive",
+                isActive,
+                isVipOnly: item.isVipOnly === true,
+                nsfw: item.nsfw === true,
+              };
+            })
+          );
+        }
+      })
+      .catch((err) => console.warn("Failed fetching /api/v1/extensi", err));
+
+    // 2. Listen koleksi EXTENSION real-time
     const unsubExt = onSnapshot(
       collection(db, "EXTENSION"),
       (snapshot) => {
@@ -120,6 +203,13 @@ export default function Home() {
           const list: ExtensionItem[] = [];
           snapshot.forEach((d) => {
             const data = d.data();
+            const isActive = data.isActive !== undefined
+              ? data.isActive === true
+              : data.status !== "inactive";
+            const rawMirrors = Array.isArray(data.mirrorUrls) ? data.mirrorUrls : [];
+            const mirrorUrls = rawMirrors.filter((m: unknown): m is string => typeof m === "string");
+            const baseUrl = typeof data.baseUrl === "string" ? data.baseUrl : (typeof data.BaseUrl === "string" ? data.BaseUrl : "");
+
             list.push({
               id: d.id,
               name: typeof data.name === "string" ? data.name : "Ekstensi Komik",
@@ -127,8 +217,12 @@ export default function Home() {
               logo: typeof data.logo === "string" ? data.logo : "",
               type: data.type === "anime" || data.type === "cinema" ? data.type : "komik",
               location: typeof data.location === "string" ? data.location : "Indonesia",
-              BaseUrl: typeof data.BaseUrl === "string" ? data.BaseUrl : "",
-              status: data.status === "inactive" ? "inactive" : "active",
+              BaseUrl: baseUrl,
+              baseUrl,
+              mirrorUrls,
+              status: isActive ? "active" : "inactive",
+              isActive,
+              isVipOnly: data.isVipOnly === true,
               nsfw: data.nsfw === true,
             });
           });
@@ -142,7 +236,7 @@ export default function Home() {
       }
     );
 
-    // 2. Listen total USERS
+    // 3. Listen total USERS
     const unsubUsers = onSnapshot(
       collection(db, "USERS"),
       (snapshot) => {
@@ -153,18 +247,32 @@ export default function Home() {
       () => {}
     );
 
-    // 3. Listen App Config di SETTINGS/app_config
+    // 4. Listen App Config di SETTINGS/app_config
     const unsubConfig = onSnapshot(
       doc(db, "SETTINGS", "app_config"),
       (snapshot) => {
         if (snapshot.exists()) {
           const data = snapshot.data();
-          const update = (data.appUpdate && typeof data.appUpdate === "object") ? data.appUpdate : {};
+          const update = (data.appUpdate && typeof data.appUpdate === "object") ? (data.appUpdate as Record<string, unknown>) : {};
+          const banner = (data.broadcastBanner && typeof data.broadcastBanner === "object") ? (data.broadcastBanner as Record<string, unknown>) : {};
+          const ann = (data.appAnnouncement && typeof data.appAnnouncement === "object") ? (data.appAnnouncement as Record<string, unknown>) : undefined;
+
           setAppConfig({
-            latestVersion: typeof update.latestAppVersion === "string" ? update.latestAppVersion : "1.2.0",
-            downloadUrl: typeof update.downloadUrl === "string" && update.downloadUrl ? update.downloadUrl : "/aplikasi/Komryuu.apk",
-            changelog: typeof update.changelog === "string" ? update.changelog : "Peningkatan performa dan sinkronisasi cloud.",
+            latestVersion: typeof data.latestVersion === "string" ? data.latestVersion : (typeof update.latestAppVersion === "string" ? update.latestAppVersion : "1.2.0"),
+            downloadUrl: typeof data.apkUrl === "string" ? data.apkUrl : (typeof update.downloadUrl === "string" && update.downloadUrl ? update.downloadUrl : "/aplikasi/Komryuu.apk"),
+            changelog: typeof data.changelog === "string" ? data.changelog : (typeof update.changelog === "string" ? update.changelog : "Peningkatan performa dan sinkronisasi cloud."),
             maintenanceMode: data.maintenanceMode === true,
+            announcement: ann ? {
+              active: ann.active === true,
+              title: typeof ann.title === "string" ? ann.title : "Pengumuman",
+              message: typeof ann.message === "string" ? ann.message : "",
+              type: ann.type === "warning" || ann.type === "update" ? ann.type : "info",
+            } : (banner.isActive === true ? {
+              active: true,
+              title: typeof banner.title === "string" ? banner.title : "Pengumuman",
+              message: typeof banner.message === "string" ? banner.message : "",
+              type: banner.type === "warning" || banner.type === "update" ? banner.type : "info",
+            } : undefined),
           });
         }
       },
@@ -179,18 +287,53 @@ export default function Home() {
   }, []);
 
   const activeExtensions = useMemo(() => {
-    return extensions.filter((item) => item.status === "active");
+    return extensions.filter((item) => item.isActive);
   }, [extensions]);
 
   const filteredExtensions = useMemo(() => {
-    if (activeCategory === "all") return activeExtensions;
-    return activeExtensions.filter((item) => item.type === activeCategory);
-  }, [activeExtensions, activeCategory]);
+    if (activeCategory === "all") return extensions;
+    return extensions.filter((item) => item.type === activeCategory);
+  }, [extensions, activeCategory]);
 
   return (
     <div className="min-h-screen bg-[#14141e] text-white selection:bg-indigo-500 selection:text-white">
+      {/* 0. ANNOUNCEMENT BANNER */}
+      {appConfig.announcement?.active && !bannerDismissed && (
+        <aside
+          role="alert"
+          aria-label="Pengumuman Penting"
+          className={`relative border-b px-4 py-3 text-xs sm:text-sm font-medium transition ${
+            appConfig.announcement.type === "warning"
+              ? "border-amber-500/30 bg-amber-500/15 text-amber-200"
+              : appConfig.announcement.type === "update"
+              ? "border-indigo-500/30 bg-indigo-500/15 text-indigo-200"
+              : "border-sky-500/30 bg-sky-500/15 text-sky-200"
+          }`}
+        >
+          <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-2 w-2 rounded-full bg-current animate-ping" />
+              <strong className="font-semibold">{appConfig.announcement.title || "Pengumuman"}:</strong>
+              <span>{appConfig.announcement.message}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setBannerDismissed(true)}
+              className="rounded-lg p-1 text-slate-400 hover:bg-white/10 hover:text-white transition"
+              aria-label="Tutup pengumuman"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </aside>
+      )}
+
       {/* 1. HERO SECTION */}
-      <Hero />
+      <Hero
+        latestVersion={appConfig.latestVersion}
+        downloadUrl={appConfig.downloadUrl}
+        onOpenChangelog={() => setChangelogOpen(true)}
+      />
 
       {/* 2. LIVE ECOSYSTEM STATS SECTION */}
       <section id="stats" className="relative border-y border-white/[0.08] bg-[#1c1c28]/60 py-12 backdrop-blur-md">
@@ -264,37 +407,48 @@ export default function Home() {
             <div>
               <div className="inline-flex items-center gap-2 rounded-full border border-indigo-500/20 bg-indigo-500/10 px-3 py-1 text-xs font-semibold text-indigo-300">
                 <Globe size={13} />
-                <span>Ekosistem Sumber Terverifikasi</span>
+                <span>Status Sumber &amp; Ekstensi Live</span>
               </div>
               <h2 className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">
-                Daftar Sumber Ekstensi Tersedia
+                Status Sumber &amp; Ekstensi Live
               </h2>
               <p className="mt-2 max-w-2xl text-sm text-slate-400">
                 Semua ekstensi di bawah ini dikelola secara dinamis melalui dashboard admin Komryuu.x
-                dan langsung terhubung ke mesin pencari klien Android.
+                dan langsung terhubung ke mesin pencari klien Android dengan auto-fallback mirror domain.
               </p>
             </div>
 
-            {/* Category Filter Pills */}
-            <div className="flex items-center gap-1.5 rounded-xl border border-white/[0.08] bg-[#1c1c28] p-1.5 text-xs font-medium">
-              {[
-                { id: "all", label: "Semua Kategori" },
-                { id: "komik", label: "Komik & Manhwa" },
-                { id: "anime", label: "Anime" },
-              ].map((cat) => (
-                <button
-                  key={cat.id}
-                  type="button"
-                  onClick={() => setActiveCategory(cat.id)}
-                  className={`rounded-lg px-3.5 py-1.5 transition-all ${
-                    activeCategory ===cat.id
-                      ? "bg-indigo-600 text-white font-semibold shadow-md shadow-indigo-600/30"
-                      : "text-slate-400 hover:text-white"
-                  }`}
-                >
-                  {cat.label}
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setChangelogOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-3.5 py-2 text-xs font-semibold text-indigo-300 hover:bg-indigo-500/20 hover:text-white transition"
+              >
+                <Sparkles size={13} className="text-amber-300" />
+                <span>Catatan Rilis (v{appConfig.latestVersion})</span>
+              </button>
+
+              {/* Category Filter Pills */}
+              <div className="flex items-center gap-1.5 rounded-xl border border-white/[0.08] bg-[#1c1c28] p-1.5 text-xs font-medium">
+                {[
+                  { id: "all", label: "Semua Kategori" },
+                  { id: "komik", label: "Komik & Manhwa" },
+                  { id: "anime", label: "Anime" },
+                ].map((cat) => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => setActiveCategory(cat.id)}
+                    className={`rounded-lg px-3.5 py-1.5 transition-all ${
+                      activeCategory === cat.id
+                        ? "bg-indigo-600 text-white font-semibold shadow-md shadow-indigo-600/30"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    {cat.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -314,15 +468,29 @@ export default function Home() {
                         <BookOpen size={22} />
                       )}
                     </div>
-                    <span className="flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-400">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                      Online
-                    </span>
+                    {ext.isActive ? (
+                      <span className="flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-400">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        Online
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1.5 rounded-full border border-amber-500/20 bg-amber-500/10 px-2.5 py-0.5 text-[10px] font-semibold text-amber-400">
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                        Maintenance
+                      </span>
+                    )}
                   </div>
 
-                  <h3 className="mt-4 text-base font-semibold text-white group-hover:text-indigo-300 transition-colors">
-                    {ext.name}
-                  </h3>
+                  <div className="mt-4 flex items-center gap-2">
+                    <h3 className="text-base font-semibold text-white group-hover:text-indigo-300 transition-colors">
+                      {ext.name}
+                    </h3>
+                    {ext.isVipOnly && (
+                      <span className="rounded bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-semibold text-amber-300 border border-amber-400/20">
+                        VIP
+                      </span>
+                    )}
+                  </div>
 
                   <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-slate-400">
                     {ext.description || "Ekstensi crawler resmi dengan scraping chapter langsung dan bypass proteksi."}
@@ -335,6 +503,11 @@ export default function Home() {
                       {ext.type}
                     </span>
                     <span className="text-[11px] text-slate-500">• {ext.location}</span>
+                    {ext.mirrorUrls && ext.mirrorUrls.length > 0 && (
+                      <span className="rounded bg-indigo-500/10 px-1.5 py-0.5 font-mono text-[9px] text-indigo-300 border border-indigo-500/20">
+                        +{ext.mirrorUrls.length} mirror
+                      </span>
+                    )}
                   </div>
                   {ext.BaseUrl && (
                     <a
@@ -683,6 +856,83 @@ Content-Type: application/json
           </div>
         </div>
       </footer>
+
+      {/* 8. CHANGELOG MODAL */}
+      {changelogOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="changelog-modal-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+        >
+          <div className="relative w-full max-w-xl overflow-hidden rounded-3xl border border-white/10 bg-[#1c1c28] p-6 sm:p-8 shadow-2xl">
+            <div className="flex items-start justify-between border-b border-white/[0.08] pb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <h3 id="changelog-modal-title" className="text-xl font-bold text-white">
+                    Catatan Rilis Komryuu.x
+                  </h3>
+                  <span className="rounded-full bg-indigo-500/20 px-2.5 py-0.5 text-xs font-semibold text-indigo-300 border border-indigo-500/30">
+                    v{appConfig.latestVersion}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-slate-400">
+                  Build resmi rilis stabil untuk platform Android Komryuu.x
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setChangelogOpen(false)}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-white transition"
+                aria-label="Tutup modal"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="my-6 max-h-[50vh] overflow-y-auto space-y-4 pr-1 text-sm text-slate-300">
+              <div className="rounded-2xl border border-white/[0.06] bg-[#14141e] p-4">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-indigo-400 mb-2">
+                  Apa yang Baru di Versi Ini:
+                </h4>
+                <div className="whitespace-pre-line text-xs sm:text-sm leading-relaxed text-slate-200">
+                  {appConfig.changelog || "Pembaruan kestabilan sistem dan peningkatan kecepatan scraper ekstensi."}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="rounded-xl border border-white/[0.06] bg-[#14141e] p-3">
+                  <span className="text-slate-400">Kompatibilitas:</span>
+                  <p className="font-semibold text-white mt-0.5">Android 7.0+ (Nougat+)</p>
+                </div>
+                <div className="rounded-xl border border-white/[0.06] bg-[#14141e] p-3">
+                  <span className="text-slate-400">Ukuran APK:</span>
+                  <p className="font-semibold text-white mt-0.5">~31.5 MB</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center justify-end gap-3 border-t border-white/[0.08] pt-4">
+              <button
+                type="button"
+                onClick={() => setChangelogOpen(false)}
+                className="w-full sm:w-auto rounded-xl border border-white/10 px-4 py-2.5 text-xs font-semibold text-slate-300 hover:bg-white/[0.06] hover:text-white transition"
+              >
+                Tutup
+              </button>
+              <a
+                href={appConfig.downloadUrl || "/aplikasi/Komryuu.apk"}
+                download="Komryuu.apk"
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-2.5 text-xs font-semibold text-white shadow-lg shadow-indigo-600/30 hover:scale-[1.02] transition"
+              >
+                <Download size={15} />
+                <span>Download APK (v{appConfig.latestVersion})</span>
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

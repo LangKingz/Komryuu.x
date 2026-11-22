@@ -21,7 +21,17 @@ import {
   Zap,
 } from "lucide-react";
 
-const Hero = () => {
+interface HeroProps {
+  latestVersion?: string;
+  downloadUrl?: string;
+  onOpenChangelog?: () => void;
+}
+
+const Hero: React.FC<HeroProps> = ({
+  latestVersion = "1.2.0",
+  downloadUrl = "/aplikasi/Komryuu.apk",
+  onOpenChangelog,
+}) => {
   return (
     <section className="relative overflow-hidden pt-32 pb-20 md:pt-40 md:pb-28">
       {/* AMBIENT GLOW EFFECTS */}
@@ -35,12 +45,24 @@ const Hero = () => {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex flex-col items-center text-center">
           {/* VERSION & PLATFORM PILL BADGE */}
-          <div className="inline-flex items-center gap-2 rounded-full border border-indigo-500/30 bg-indigo-500/10 px-4 py-1.5 text-xs font-medium text-indigo-300 shadow-inner backdrop-blur-md">
-            <span className="flex h-2 w-2 rounded-full bg-indigo-400 animate-pulse" />
-            <span className="font-semibold text-white">v1.2.0 Active</span>
+          <div className="inline-flex flex-wrap items-center justify-center gap-2 rounded-full border border-indigo-500/30 bg-indigo-500/10 px-4 py-1.5 text-xs font-medium text-indigo-300 shadow-inner backdrop-blur-md">
+            <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="font-semibold text-white">v{latestVersion} Active</span>
             <span className="text-indigo-400">•</span>
-            <span>Unified Comic Ecosystem & Cloud Sync Gateway</span>
-            <Sparkles size={13} className="text-indigo-300" />
+            <span>Unified Comic Ecosystem &amp; Cloud Sync Gateway</span>
+            {onOpenChangelog && (
+              <>
+                <span className="text-indigo-400">•</span>
+                <button
+                  type="button"
+                  onClick={onOpenChangelog}
+                  className="inline-flex items-center gap-1 font-semibold text-indigo-200 underline decoration-indigo-400/50 underline-offset-2 hover:text-white hover:decoration-white transition"
+                >
+                  <Sparkles size={12} className="text-amber-300" />
+                  <span>Catatan Rilis</span>
+                </button>
+              </>
+            )}
           </div>
 
           {/* MAIN HEADLINE */}
@@ -70,12 +92,12 @@ const Hero = () => {
             </Link>
 
             <a
-              href="/aplikasi/Komryuu.apk"
+              href={downloadUrl || "/aplikasi/Komryuu.apk"}
               download="Komryuu.apk"
               className="inline-flex items-center justify-center gap-2.5 rounded-xl border border-white/10 bg-[#1c1c28] px-7 py-3.5 text-sm font-semibold text-slate-200 backdrop-blur-md transition-all hover:border-white/20 hover:bg-[#232332] hover:text-white"
             >
               <Download size={17} className="text-indigo-400" />
-              <span>Download Aplikasi Android</span>
+              <span>Download Aplikasi Android (v{latestVersion})</span>
             </a>
           </div>
 
