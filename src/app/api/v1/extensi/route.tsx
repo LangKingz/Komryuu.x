@@ -13,6 +13,7 @@ import {
   listFirestoreDocuments,
   updateFirestoreDocument,
 } from "@/lib/firestore-rest";
+import { recordAdminActivity } from "@/lib/admin-activity";
 
 const extensionTypes = ["komik", "anime", "cinema"] as const;
 type ExtensionType = (typeof extensionTypes)[number];
@@ -55,22 +56,87 @@ function toExtensionData(body: Record<string, unknown>, partial = false): Extens
   ];
 
   for (const [field, key, alternate] of stringFields) {
-    const value = body[key] ?? (alternate ? body[alternate] : undefined);
+    let value = body[key] ?? (alternate ? body[alternate] : undefined);
+    if (field === "BaseUrl" && value === undefined && typeof body.baseUrl === "string") {
+      value = body.baseUrl;
+    }
     if (value !== undefined && typeof value !== "string") {
       return { success: false, error: `${field} must be a string` };
     }
-    if (typeof value === "string") fields[field] = value.trim();
-    else if (!partial && ["name", "logo", "type", "BaseUrl"].includes(field)) {
+    if (typeof value === "string") {
+      fields[field] = value.trim();
+      if (field === "BaseUrl") {
+        fields.baseUrl = value.trim();
+      }
+    } else if (!partial && ["name", "logo", "type", "BaseUrl"].includes(field)) {
       return { success: false, error: `${field} is required` };
     }
   }
 
-  if (body.status !== undefined) {
+  if (body.baseUrl !== undefined && typeof body.baseUrl === "string") {
+    fields.baseUrl = body.baseUrl.trim();
+    if (!fields.BaseUrl) fields.BaseUrl = fields.baseUrl;
+  }
+
+  if (body.mirrorUrls !== undefined) {
+    if (!Array.isArray(body.mirrorUrls)) {
+      return { success: false, error: "mirrorUrls must be an array of strings" };
+    }
+    const mirrors: string[] = [];
+    for (const item of body.mirrorUrls) {
+      if (typeof item === "string" && item.trim()) {
+        const trimmed = item.trim();
+        if (!isHttpUrl(trimmed)) {
+          return { success: false, error: `Mirror URL "${trimmed}" must be an HTTP(S) URL` };
+        }
+        mirrors.push(trimmed);
+      }
+    }
+    fields.mirrorUrls = mirrors;
+  }
+
+  if (body.isActive !== undefined) {
+    if (typeof body.isActive !== "boolean") {
+      return { success: false, error: "isActive must be a boolean" };
+    }
+    fields.isActive = body.isActive;
+    fields.status = body.isActive ? "active" : "inactive";
+  } else if (body.status !== undefined) {
     if (body.status !== "active" && body.status !== "inactive") {
       return { success: false, error: "status must be active or inactive" };
     }
     fields.status = body.status;
+    fields.isActive = body.status === "active";
   }
+
+  if (body.isVipOnly !== undefined) {
+    if (typeof body.isVipOnly !== "boolean") {
+      return { success: false, error: "isVipOnly must be a boolean" };
+    }
+    fields.isVipOnly = body.isVipOnly;
+  }
+
+  if (body.customHeaders !== undefined) {
+    if (typeof body.customHeaders !== "object" || body.customHeaders === null || Array.isArray(body.customHeaders)) {
+      return { success: false, error: "customHeaders must be an object" };
+    }
+    const rawHeaders = body.customHeaders as Record<string, unknown>;
+    const headers: { referer?: string; userAgent?: string; cookie?: string } = {};
+    if (rawHeaders.referer !== undefined) {
+      if (typeof rawHeaders.referer !== "string") return { success: false, error: "customHeaders.referer must be a string" };
+      headers.referer = rawHeaders.referer.trim();
+    }
+    if (rawHeaders.userAgent !== undefined) {
+      if (typeof rawHeaders.userAgent !== "string") return { success: false, error: "customHeaders.userAgent must be a string" };
+      headers.userAgent = rawHeaders.userAgent.trim();
+    }
+    if (rawHeaders.cookie !== undefined) {
+      if (typeof rawHeaders.cookie !== "string") return { success: false, error: "customHeaders.cookie must be a string" };
+      headers.cookie = rawHeaders.cookie.trim();
+    }
+    fields.customHeaders = headers;
+  }
+
   if (body.nsfw !== undefined) {
     if (typeof body.nsfw !== "boolean") {
       return { success: false, error: "nsfw must be a boolean" };
@@ -167,20 +233,44 @@ export async function GET(request: Request) {
     if (type) extensions = extensions.filter((extension) => extension.type === type);
     const total = extensions.length;
     if (limit !== undefined) extensions = extensions.slice(0, limit);
-    const publicExtensions = extensions.map((extension) => ({
-      id: typeof extension.id === "string" ? extension.id : "",
-      name: typeof extension.name === "string" ? extension.name : "",
-      description: typeof extension.description === "string" ? extension.description : "",
-      logo: typeof extension.logo === "string" ? extension.logo : "",
-      type: typeof extension.type === "string" ? extension.type : "",
-      BaseUrl: typeof extension.BaseUrl === "string" ? extension.BaseUrl : "",
-      UrlSearch: typeof extension.UrlSearch === "string" ? extension.UrlSearch : "",
-      location: typeof extension.location === "string" ? extension.location : "",
-      status: extension.status === "inactive" ? "inactive" : "active",
-      nsfw: extension.nsfw === true || extension.isNsfw === true,
-      createdAt: typeof extension.createdAt === "string" ? extension.createdAt : "",
-      updatedAt: typeof extension.updatedAt === "string" ? extension.updatedAt : "",
-    }));
+    const publicExtensions = extensions.map((extension) => {
+      const isActive = extension.isActive !== undefined
+        ? extension.isActive === true
+        : extension.status !== "inactive";
+      const baseUrl = typeof extension.baseUrl === "string" && extension.baseUrl
+        ? extension.baseUrl
+        : typeof extension.BaseUrl === "string" ? extension.BaseUrl : "";
+      const mirrorUrls = Array.isArray(extension.mirrorUrls)
+        ? extension.mirrorUrls.filter((item): item is string => typeof item === "string")
+        : [];
+      const customHeaders = isRecord(extension.customHeaders)
+        ? {
+            referer: typeof extension.customHeaders.referer === "string" ? extension.customHeaders.referer : undefined,
+            userAgent: typeof extension.customHeaders.userAgent === "string" ? extension.customHeaders.userAgent : undefined,
+            cookie: typeof extension.customHeaders.cookie === "string" ? extension.customHeaders.cookie : undefined,
+          }
+        : undefined;
+
+      return {
+        id: typeof extension.id === "string" ? extension.id : "",
+        name: typeof extension.name === "string" ? extension.name : "",
+        description: typeof extension.description === "string" ? extension.description : "",
+        logo: typeof extension.logo === "string" ? extension.logo : "",
+        type: typeof extension.type === "string" ? extension.type : "",
+        BaseUrl: baseUrl,
+        baseUrl,
+        mirrorUrls,
+        UrlSearch: typeof extension.UrlSearch === "string" ? extension.UrlSearch : "",
+        location: typeof extension.location === "string" ? extension.location : "",
+        status: isActive ? "active" : "inactive",
+        isActive,
+        isVipOnly: extension.isVipOnly === true,
+        customHeaders,
+        nsfw: extension.nsfw === true || extension.isNsfw === true,
+        createdAt: typeof extension.createdAt === "string" ? extension.createdAt : "",
+        updatedAt: typeof extension.updatedAt === "string" ? extension.updatedAt : "",
+      };
+    });
 
     return NextResponse.json({
       success: true,
@@ -209,7 +299,7 @@ export async function POST(request: Request) {
     }
 
     const id = randomUUID().replace(/-/g, "");
-    const data = {
+    const data: Record<string, unknown> = {
       ...validation.data,
       description: validation.data.description ?? "",
       UrlSearch: validation.data.UrlSearch ?? "",
@@ -220,6 +310,12 @@ export async function POST(request: Request) {
     };
     await createFirestoreDocument("EXTENSION", id, data);
     cachedExtensions = null;
+
+    try {
+      await recordAdminActivity("Ekstensi ditambahkan via API", String(data.name || id), id);
+    } catch (logError) {
+      console.error("Failed to log activity for created extension", logError);
+    }
 
     return NextResponse.json({ success: true, id, data: { id, ...data } }, { status: 201 });
   } catch (error) {
@@ -258,6 +354,12 @@ export async function PUT(request: Request) {
     });
     cachedExtensions = null;
 
+    try {
+      await recordAdminActivity("Ekstensi diperbarui via API", String(existing.name || id), id);
+    } catch (logError) {
+      console.error("Failed to log activity for updated extension", logError);
+    }
+
     return NextResponse.json({
       success: true,
       id,
@@ -285,6 +387,13 @@ export async function DELETE(request: Request) {
     }
     await deleteFirestoreDocument("EXTENSION", id);
     cachedExtensions = null;
+
+    try {
+      await recordAdminActivity("Ekstensi dihapus via API", String(existing.name || id), id);
+    } catch (logError) {
+      console.error("Failed to log activity for deleted extension", logError);
+    }
+
     return NextResponse.json({ success: true, id });
   } catch (error) {
     return failureResponse(error, "delete extension");

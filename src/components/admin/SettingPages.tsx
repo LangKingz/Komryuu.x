@@ -20,9 +20,8 @@ import {
   DEFAULT_APP_UPDATE,
   DEFAULT_BROADCAST_BANNER,
   normalizeAppSettings,
+  type AnnouncementType,
   type AppSettings,
-  type AppUpdate,
-  type BroadcastBanner,
 } from "@/model/app-settings";
 
 type Toast = { kind: "success" | "error"; message: string };
@@ -53,8 +52,11 @@ export default function SettingPages() {
   const [saving, setSaving] = useState(false);
   const [generatingKey, setGeneratingKey] = useState(false);
   const [generatedKey, setGeneratedKey] = useState("");
+
+  // Local drafts for inputs to provide smooth typing
   const [rateLimitDraft, setRateLimitDraft] = useState(String(DEFAULT_APP_SETTINGS.rateLimitPerMinute));
   const [cacheTtlDraft, setCacheTtlDraft] = useState(String(DEFAULT_APP_SETTINGS.extensionCacheTtlSeconds));
+
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
@@ -89,13 +91,14 @@ export default function SettingPages() {
     return () => window.clearTimeout(timeout);
   }, [toast]);
 
-  async function savePatch(patch: Record<string, unknown>) {
+  async function savePatch(patch: Record<string, unknown>, activityDescription?: { action: string; detail: string }) {
     const previous = settingsRef.current;
     const next = { ...previous, ...patch } as AppSettings;
     settingsRef.current = next;
     setSettings(next);
     setSaving(true);
     setError(null);
+
     try {
       await setDoc(
         doc(db, "SETTINGS", "app_config"),
@@ -103,6 +106,14 @@ export default function SettingPages() {
         { merge: true }
       );
       setToast({ kind: "success", message: "Pengaturan berhasil disimpan." });
+
+      if (activityDescription) {
+        try {
+          await recordAdminActivity(activityDescription.action, activityDescription.detail);
+        } catch (logErr) {
+          console.error("Activity log failed", logErr);
+        }
+      }
       return true;
     } catch (saveError) {
       settingsRef.current = previous;
@@ -116,22 +127,81 @@ export default function SettingPages() {
     }
   }
 
-  function updateBroadcastBanner(patch: Partial<BroadcastBanner>) {
-    const currentBanner = settingsRef.current.broadcastBanner || DEFAULT_BROADCAST_BANNER;
-    const updatedBanner: BroadcastBanner = { ...currentBanner, ...patch };
-    const next = { ...settingsRef.current, broadcastBanner: updatedBanner };
-    settingsRef.current = next;
-    setSettings(next);
-    return updatedBanner;
+  // Version & Release controls
+  function handleUpdateRelease(patch: {
+    latestVersion?: string;
+    minVersionCode?: number;
+    forceUpdate?: boolean;
+    apkUrl?: string;
+    changelog?: string;
+  }) {
+    const cur = settingsRef.current;
+    const nextLatest = patch.latestVersion !== undefined ? patch.latestVersion : (cur.latestVersion || "1.2.0");
+    const nextMinCode = patch.minVersionCode !== undefined ? patch.minVersionCode : (cur.minVersionCode ?? 1);
+    const nextForce = patch.forceUpdate !== undefined ? patch.forceUpdate : (cur.forceUpdate ?? false);
+    const nextApkUrl = patch.apkUrl !== undefined ? patch.apkUrl : (cur.apkUrl || "/aplikasi/Komryuu.apk");
+    const nextChangelog = patch.changelog !== undefined ? patch.changelog : (cur.changelog || "");
+
+    const appUpdateObj = {
+      ...cur.appUpdate,
+      latestVersion: nextLatest,
+      latestAppVersion: nextLatest,
+      minVersionCode: nextMinCode,
+      forceUpdate: nextForce,
+      apkUrl: nextApkUrl,
+      downloadUrl: nextApkUrl,
+      changelog: nextChangelog,
+    };
+
+    return {
+      latestVersion: nextLatest,
+      minVersionCode: nextMinCode,
+      forceUpdate: nextForce,
+      apkUrl: nextApkUrl,
+      changelog: nextChangelog,
+      appUpdate: appUpdateObj,
+    };
   }
 
-  function updateAppUpdate(patch: Partial<AppUpdate>) {
-    const currentUpdate = settingsRef.current.appUpdate || DEFAULT_APP_UPDATE;
-    const updatedUpdate: AppUpdate = { ...currentUpdate, ...patch };
-    const next = { ...settingsRef.current, appUpdate: updatedUpdate };
-    settingsRef.current = next;
-    setSettings(next);
-    return updatedUpdate;
+  // Announcement controls
+  function handleUpdateAnnouncement(patch: {
+    active?: boolean;
+    title?: string;
+    message?: string;
+    type?: AnnouncementType;
+  }) {
+    const cur = settingsRef.current;
+    const curAnn = cur.appAnnouncement || {
+      active: cur.broadcastBanner.isActive,
+      title: cur.broadcastBanner.title,
+      message: cur.broadcastBanner.message,
+      type: "info" as const,
+    };
+
+    const nextActive = patch.active !== undefined ? patch.active : curAnn.active;
+    const nextTitle = patch.title !== undefined ? patch.title : curAnn.title;
+    const nextMessage = patch.message !== undefined ? patch.message : curAnn.message;
+    const nextType = patch.type !== undefined ? patch.type : curAnn.type;
+
+    const announcementObj = {
+      active: nextActive,
+      title: nextTitle,
+      message: nextMessage,
+      type: nextType,
+    };
+
+    const broadcastBannerObj = {
+      isActive: nextActive,
+      title: nextTitle,
+      message: nextMessage,
+      type: nextType,
+    };
+
+    return {
+      announcement: nextMessage,
+      appAnnouncement: announcementObj,
+      broadcastBanner: broadcastBannerObj,
+    };
   }
 
   function saveNumberSetting(field: "rateLimitPerMinute" | "extensionCacheTtlSeconds", value: string) {
@@ -157,15 +227,13 @@ export default function SettingPages() {
       const random = crypto.getRandomValues(new Uint8Array(32));
       const key = Array.from(random, (byte) => byte.toString(16).padStart(2, "0")).join("");
       const externalApiKeyHash = await hashKey(key);
-      const saved = await savePatch({ externalApiKeyHash });
+      const saved = await savePatch(
+        { externalApiKeyHash },
+        { action: "API key eksternal dirotasi", detail: "Kunci baru di-hash dengan SHA-256." }
+      );
       if (saved) {
         setGeneratedKey(key);
         setToast({ kind: "success", message: "API key baru tersimpan. Salin sekarang karena nilai mentah tidak disimpan." });
-        try {
-          await recordAdminActivity("API key eksternal dirotasi", "Kunci tersimpan sebagai hash.");
-        } catch (logError) {
-          console.error("API key was rotated but its activity log failed", logError);
-        }
       }
     } catch (keyError) {
       const message = keyError instanceof Error ? keyError.message : "Gagal membuat API key.";
@@ -236,8 +304,7 @@ export default function SettingPages() {
       try {
         await recordAdminActivity("Pengaturan aplikasi direset", "Nilai SETTINGS/app_config kembali ke default.");
       } catch (logError) {
-        console.error("Settings were reset but their activity log failed", logError);
-        setToast({ kind: "error", message: "Pengaturan direset, tetapi log aktivitas gagal disimpan." });
+        console.error("Settings reset activity log failed", logError);
       }
     } catch (resetError) {
       setToast({
@@ -249,17 +316,19 @@ export default function SettingPages() {
     }
   }
 
-  const settingCard = "rounded-2xl border border-white/[0.07] bg-[#1c1c28] p-5 md:p-6";
-  const toggleCard = "flex items-center justify-between gap-4 rounded-xl border border-white/[0.07] bg-[#14141e] p-4";
-  const inputClass = "mt-1.5 w-full rounded-lg border border-white/[0.09] bg-[#14141e] px-3.5 py-2.5 text-sm text-white outline-none placeholder:text-slate-600 focus:border-sky-500 transition";
+  const settingCard = "rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-5 md:p-6";
+  const toggleCard = "flex items-center justify-between gap-4 rounded-xl border border-white/[0.08] bg-[#14141e] p-4";
+  const inputClass = "mt-1.5 w-full rounded-lg border border-white/10 bg-[#14141e] px-3.5 py-2.5 text-sm text-white outline-none placeholder:text-slate-600 focus:border-indigo-500 transition";
 
   return (
     <section className="min-h-full bg-[#14141e] p-4 text-white md:p-8">
       <div className="mx-auto max-w-5xl">
         <header className="mb-7">
-          <p className="text-sm font-medium uppercase tracking-[0.2em] text-sky-400">Konfigurasi</p>
-          <h1 className="mt-2 text-3xl font-semibold">Pengaturan Global</h1>
-          <p className="mt-2 text-sm text-slate-400">Perubahan disimpan langsung ke dokumen SETTINGS/app_config Firestore.</p>
+          <p className="text-sm font-medium uppercase tracking-[0.2em] text-indigo-400">Konfigurasi Sistem</p>
+          <h1 className="mt-2 text-3xl font-semibold">Status Server, Rilis & Pengaturan</h1>
+          <p className="mt-2 text-sm text-slate-400">
+            Perubahan disinkronkan secara real-time ke Firestore dokumen <code className="text-indigo-300">SETTINGS/app_config</code> dan disajikan via endpoint <code className="text-sky-300">/api/v1/config</code>.
+          </p>
         </header>
 
         {toast && (
@@ -277,239 +346,61 @@ export default function SettingPages() {
         {error && <p role="alert" className="mb-5 text-sm text-rose-300">{error}</p>}
 
         {loading ? (
-          <div className={settingCard + " py-16 text-center text-slate-300"}>Memuat pengaturan...</div>
+          <div className={settingCard + " py-16 text-center text-slate-300"}>Memuat pengaturan aplikasi...</div>
         ) : (
           <div className="space-y-6">
-            {/* 1. SECTION: PENGUMUMAN & BROADCAST APLIKASI */}
+            {/* 1. SECTION: STATUS SERVER & PEMELIHARAAN */}
             <section className={settingCard}>
-              <div className="mb-5 flex items-start gap-3">
-                <span className="rounded-xl bg-amber-400/10 p-2.5 text-amber-300">
-                  <Megaphone size={22} weight="duotone" />
-                </span>
-                <div>
-                  <h2 className="text-lg font-semibold">Pengumuman & Broadcast Aplikasi</h2>
-                  <p className="mt-0.5 text-sm text-slate-400">
-                    Kirim pengumuman penting atau banner darurat langsung ke aplikasi Android user.
-                  </p>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                <label className={toggleCard}>
-                  <div>
-                    <span className="block font-medium">Aktifkan Banner Pengumuman</span>
-                    <span className="mt-0.5 block text-xs text-slate-400">
-                      Tampilkan bar pengumuman melayang di halaman utama aplikasi.
-                    </span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={settings.broadcastBanner?.isActive ?? false}
-                    disabled={saving}
-                    onChange={(event) => {
-                      const updated = updateBroadcastBanner({ isActive: event.target.checked });
-                      void savePatch({ broadcastBanner: updated });
-                    }}
-                    className="h-5 w-5 accent-amber-400 cursor-pointer"
-                    aria-label="Aktifkan Banner Pengumuman"
-                  />
-                </label>
-
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <div className="sm:col-span-2">
-                    <label className="block text-sm text-slate-300">
-                      Judul Pengumuman
-                      <input
-                        value={settings.broadcastBanner?.title ?? ""}
-                        placeholder="Contoh: Pemeliharaan Server / Rilis Fitur Baru"
-                        onChange={(event) => updateBroadcastBanner({ title: event.target.value })}
-                        onBlur={() => {
-                          const banner = settingsRef.current.broadcastBanner;
-                          void savePatch({ broadcastBanner: banner });
-                        }}
-                        className={inputClass}
-                      />
-                    </label>
-                  </div>
-                  <div>
-                    <label className="block text-sm text-slate-300">
-                      Tipe Alert
-                      <select
-                        value={settings.broadcastBanner?.type ?? "info"}
-                        disabled={saving}
-                        onChange={(event) => {
-                          const updated = updateBroadcastBanner({ type: event.target.value });
-                          void savePatch({ broadcastBanner: updated });
-                        }}
-                        className={inputClass}
-                      >
-                        <option value="info">Info (Biru/Abu)</option>
-                        <option value="warning">Warning (Kuning/Oranye)</option>
-                        <option value="urgent">Urgent (Merah/Kritis)</option>
-                      </select>
-                    </label>
-                  </div>
-                </div>
-
-                <label className="block text-sm text-slate-300">
-                  Pesan Pengumuman
-                  <textarea
-                    rows={3}
-                    value={settings.broadcastBanner?.message ?? ""}
-                    placeholder="Tulis pesan siaran yang akan dibaca oleh semua pengguna aplikasi..."
-                    onChange={(event) => {
-                      const msg = event.target.value;
-                      updateBroadcastBanner({ message: msg });
-                    }}
-                    onBlur={() => {
-                      const banner = settingsRef.current.broadcastBanner;
-                      void savePatch({
-                        broadcastBanner: banner,
-                        announcement: banner?.message || "",
-                      });
-                    }}
-                    className={inputClass}
-                  />
-                  <span className="mt-1 block text-xs text-slate-500">
-                    Tersimpan otomatis setelah cursor meninggalkan kotak teks.
+              <div className="mb-5 flex items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <span className="rounded-xl bg-rose-500/10 p-2.5 text-rose-400 border border-rose-500/20">
+                    <ShieldWarning size={22} weight="duotone" />
                   </span>
-                </label>
-              </div>
-            </section>
-
-            {/* 2. SECTION: KONTROL VERSI & FORCE UPDATE APK */}
-            <section className={settingCard}>
-              <div className="mb-5 flex items-start gap-3">
-                <span className="rounded-xl bg-sky-400/10 p-2.5 text-sky-300">
-                  <Devices size={22} weight="duotone" />
-                </span>
-                <div>
-                  <h2 className="text-lg font-semibold">Kontrol Versi & Force Update APK</h2>
-                  <p className="mt-0.5 text-sm text-slate-400">
-                    Atur versi minimum yang diizinkan dan paksa pengguna mengupdate aplikasi ke versi terbaru.
-                  </p>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                <label className={toggleCard}>
                   <div>
-                    <span className="block font-medium">Wajibkan Force Update</span>
-                    <span className="mt-0.5 block text-xs text-slate-400">
-                      Jika aktif, aplikasi Android di bawah Minimum App Version akan diblokir dengan dialog update wajib.
-                    </span>
+                    <h2 className="text-lg font-semibold text-white">Status Server & Mode Pemeliharaan</h2>
+                    <p className="mt-0.5 text-sm text-slate-400">
+                      Kontrol status online/offline API saat update database atau perbaikan infrastruktur.
+                    </p>
                   </div>
-                  <input
-                    type="checkbox"
-                    checked={settings.appUpdate?.forceUpdate ?? false}
-                    disabled={saving}
-                    onChange={(event) => {
-                      const updated = updateAppUpdate({ forceUpdate: event.target.checked });
-                      void savePatch({ appUpdate: updated });
-                    }}
-                    className="h-5 w-5 accent-sky-400 cursor-pointer"
-                    aria-label="Wajibkan Force Update"
-                  />
-                </label>
-
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="block text-sm text-slate-300">
-                    Minimum App Version
-                    <input
-                      value={settings.appUpdate?.minAppVersion ?? settings.minimumAppVersion}
-                      maxLength={32}
-                      placeholder="1.0.0"
-                      onChange={(event) => {
-                        const val = event.target.value;
-                        updateAppUpdate({ minAppVersion: val });
-                      }}
-                      onBlur={() => {
-                        const val = (settingsRef.current.appUpdate?.minAppVersion || "1.0.0").trim();
-                        void savePatch({
-                          minimumAppVersion: val,
-                          appUpdate: updateAppUpdate({ minAppVersion: val }),
-                        });
-                      }}
-                      className={inputClass}
-                    />
-                    <span className="mt-1 block text-xs text-slate-500">Versi terendah yang masih boleh mengakses API.</span>
-                  </label>
-
-                  <label className="block text-sm text-slate-300">
-                    Latest App Version
-                    <input
-                      value={settings.appUpdate?.latestAppVersion ?? "1.0.0"}
-                      maxLength={32}
-                      placeholder="1.1.0"
-                      onChange={(event) => updateAppUpdate({ latestAppVersion: event.target.value })}
-                      onBlur={() => {
-                        const val = (settingsRef.current.appUpdate?.latestAppVersion || "1.0.0").trim();
-                        void savePatch({ appUpdate: updateAppUpdate({ latestAppVersion: val }) });
-                      }}
-                      className={inputClass}
-                    />
-                    <span className="mt-1 block text-xs text-slate-500">Versi terbaru yang tersedia di server/distribusi.</span>
-                  </label>
                 </div>
-
-                <label className="block text-sm text-slate-300">
-                  URL / Path Download APK Terbaru
-                  <input
-                    type="text"
-                    value={settings.appUpdate?.downloadUrl ?? ""}
-                    placeholder="/aplikasi/Komryuu.apk atau https://domain.com/Komryuu.apk"
-                    onChange={(event) => updateAppUpdate({ downloadUrl: event.target.value })}
-                    onBlur={() => {
-                      const url = (settingsRef.current.appUpdate?.downloadUrl || "").trim();
-                      void savePatch({ appUpdate: updateAppUpdate({ downloadUrl: url }) });
-                    }}
-                    className={inputClass}
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
+                    settings.maintenanceMode
+                      ? "bg-rose-500/15 text-rose-300 border border-rose-500/30"
+                      : "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                  }`}
+                >
+                  <span
+                    className={`h-2 w-2 rounded-full ${
+                      settings.maintenanceMode ? "bg-rose-400 animate-pulse" : "bg-emerald-400"
+                    }`}
                   />
-                  <span className="mt-1 block text-xs text-slate-500">Link langsung file APK (bisa path lokal publik seperti &apos;/aplikasi/Komryuu.apk&apos; atau link eksternal).</span>
-                </label>
-
-                <label className="block text-sm text-slate-300">
-                  Catatan Pembaruan (Changelog)
-                  <textarea
-                    rows={3}
-                    value={settings.appUpdate?.changelog ?? ""}
-                    placeholder="- Penambahan fitur sinkronisasi cloud&#10;- Perbaikan bug saat membaca manga&#10;- Peningkatan performa"
-                    onChange={(event) => updateAppUpdate({ changelog: event.target.value })}
-                    onBlur={() => {
-                      const cl = (settingsRef.current.appUpdate?.changelog || "").trim();
-                      void savePatch({ appUpdate: updateAppUpdate({ changelog: cl }) });
-                    }}
-                    className={inputClass}
-                  />
-                </label>
-              </div>
-            </section>
-
-            {/* 3. SECTION: STATUS SISTEM & MAINTENANCE */}
-            <section className={settingCard}>
-              <div className="mb-5 flex items-start gap-3">
-                <span className="rounded-xl bg-rose-400/10 p-2.5 text-rose-300">
-                  <ShieldWarning size={22} weight="duotone" />
+                  {settings.maintenanceMode ? "Maintenance Aktif" : "Server Online"}
                 </span>
-                <div>
-                  <h2 className="text-lg font-semibold">Status Sistem & Pemeliharaan</h2>
-                  <p className="mt-0.5 text-sm text-slate-400">Kontrol downtime aplikasi untuk maintenance terjadwal.</p>
-                </div>
               </div>
 
               <div className="space-y-4">
                 <label className={toggleCard}>
                   <div>
-                    <span className="block font-medium">Maintenance Mode</span>
+                    <span className="block font-medium text-white">Aktifkan Maintenance Mode</span>
                     <span className="mt-0.5 block text-xs text-slate-400">
-                      API eksternal akan mengembalikan HTTP 503 dengan pesan pemeliharaan.
+                      Jika aktif, aplikasi mobile dan API eksternal menerima status HTTP 503 dengan pesan di bawah.
                     </span>
                   </div>
                   <input
                     type="checkbox"
                     checked={settings.maintenanceMode}
                     disabled={saving}
-                    onChange={(event) => void savePatch({ maintenanceMode: event.target.checked })}
+                    onChange={(event) => {
+                      const nextVal = event.target.checked;
+                      void savePatch(
+                        { maintenanceMode: nextVal },
+                        {
+                          action: nextVal ? "Maintenance mode diaktifkan" : "Maintenance mode dinonaktifkan",
+                          detail: nextVal ? "Server berada dalam pemeliharaan." : "Server kembali online.",
+                        }
+                      );
+                    }}
                     className="h-5 w-5 accent-rose-500 cursor-pointer"
                     aria-label="Maintenance Mode"
                   />
@@ -521,14 +412,316 @@ export default function SettingPages() {
                     rows={2}
                     value={settings.maintenanceMessage}
                     onChange={(event) => {
-                      const value = event.target.value;
-                      const next = { ...settingsRef.current, maintenanceMessage: value };
-                      settingsRef.current = next;
-                      setSettings(next);
+                      const msg = event.target.value;
+                      setSettings((prev) => ({ ...prev, maintenanceMessage: msg }));
+                      settingsRef.current.maintenanceMessage = msg;
                     }}
-                    onBlur={() => void savePatch({ maintenanceMessage: settingsRef.current.maintenanceMessage.trim() })}
+                    onBlur={() => {
+                      const msg = settingsRef.current.maintenanceMessage.trim();
+                      void savePatch(
+                        { maintenanceMessage: msg },
+                        { action: "Pesan maintenance diubah", detail: msg }
+                      );
+                    }}
                     className={inputClass}
                   />
+                  <span className="mt-1 block text-xs text-slate-500">
+                    Pesan ini akan ditampilkan pada dialog pop-up di aplikasi Android saat maintenance aktif.
+                  </span>
+                </label>
+              </div>
+            </section>
+
+            {/* 2. SECTION: KONTROL RILIS VERSI APK & FORCE UPDATE */}
+            <section className={settingCard}>
+              <div className="mb-5 flex items-start gap-3">
+                <span className="rounded-xl bg-indigo-500/10 p-2.5 text-indigo-400 border border-indigo-500/20">
+                  <Devices size={22} weight="duotone" />
+                </span>
+                <div>
+                  <h2 className="text-lg font-semibold text-white">Rilis Versi APK & Force Update</h2>
+                  <p className="mt-0.5 text-sm text-slate-400">
+                    Kelola versi aplikasi Android terbaru, version code minimum, serta aturan pembaruan paksa (*force update*).
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <label className={toggleCard}>
+                  <div>
+                    <span className="block font-medium text-white">Wajibkan Update (Force Update)</span>
+                    <span className="mt-0.5 block text-xs text-slate-400">
+                      Jika aktif, pengguna yang memiliki versionCode di bawah versi server tidak dapat menutup dialog pembaruan.
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.forceUpdate ?? settings.appUpdate?.forceUpdate ?? false}
+                    disabled={saving}
+                    onChange={(event) => {
+                      const nextForce = event.target.checked;
+                      const patch = handleUpdateRelease({ forceUpdate: nextForce });
+                      void savePatch(patch, {
+                        action: nextForce ? "Force update diwajibkan" : "Force update dinonaktifkan",
+                        detail: `Versi ${patch.latestVersion}`,
+                      });
+                    }}
+                    className="h-5 w-5 accent-indigo-500 cursor-pointer"
+                    aria-label="Wajibkan Force Update"
+                  />
+                </label>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="block text-sm text-slate-300">
+                    Latest Version (Versi Terbaru) *
+                    <input
+                      value={settings.latestVersion ?? settings.appUpdate?.latestAppVersion ?? "1.2.0"}
+                      maxLength={32}
+                      placeholder="1.2.0"
+                      onChange={(event) => {
+                        const val = event.target.value;
+                        setSettings((prev) => ({
+                          ...prev,
+                          latestVersion: val,
+                          appUpdate: { ...prev.appUpdate, latestAppVersion: val, latestVersion: val },
+                        }));
+                        settingsRef.current.latestVersion = val;
+                      }}
+                      onBlur={() => {
+                        const val = (settingsRef.current.latestVersion || "1.2.0").trim();
+                        const patch = handleUpdateRelease({ latestVersion: val });
+                        void savePatch(patch, {
+                          action: "Versi APK terbaru diperbarui",
+                          detail: `Versi: ${val}`,
+                        });
+                      }}
+                      className={inputClass}
+                    />
+                    <span className="mt-1 block text-xs text-slate-500">
+                      String versi tampilan aplikasi (contoh: 1.2.0).
+                    </span>
+                  </label>
+
+                  <label className="block text-sm text-slate-300">
+                    Min Version Code (Kode Versi Minimum) *
+                    <input
+                      type="number"
+                      min={1}
+                      value={settings.minVersionCode ?? settings.appUpdate?.minVersionCode ?? 1}
+                      onChange={(event) => {
+                        const val = parseInt(event.target.value, 10) || 1;
+                        setSettings((prev) => ({
+                          ...prev,
+                          minVersionCode: val,
+                          appUpdate: { ...prev.appUpdate, minVersionCode: val },
+                        }));
+                        settingsRef.current.minVersionCode = val;
+                      }}
+                      onBlur={() => {
+                        const val = settingsRef.current.minVersionCode ?? 1;
+                        const patch = handleUpdateRelease({ minVersionCode: val });
+                        void savePatch(patch, {
+                          action: "Minimum version code APK diperbarui",
+                          detail: `Code: ${val}`,
+                        });
+                      }}
+                      className={inputClass}
+                    />
+                    <span className="mt-1 block text-xs text-slate-500">
+                      Integer versionCode Android (misal: 10). APK dengan versionCode &lt; nilai ini akan diminta update.
+                    </span>
+                  </label>
+                </div>
+
+                <label className="block text-sm text-slate-300">
+                  URL Unduhan APK (apkUrl) *
+                  <input
+                    type="text"
+                    value={settings.apkUrl ?? settings.appUpdate?.downloadUrl ?? "/aplikasi/Komryuu.apk"}
+                    placeholder="/aplikasi/Komryuu.apk atau https://domain.com/Komryuu.apk"
+                    onChange={(event) => {
+                      const val = event.target.value;
+                      setSettings((prev) => ({
+                        ...prev,
+                        apkUrl: val,
+                        appUpdate: { ...prev.appUpdate, downloadUrl: val, apkUrl: val },
+                      }));
+                      settingsRef.current.apkUrl = val;
+                    }}
+                    onBlur={() => {
+                      const val = (settingsRef.current.apkUrl || "/aplikasi/Komryuu.apk").trim();
+                      const patch = handleUpdateRelease({ apkUrl: val });
+                      void savePatch(patch, {
+                        action: "URL download APK diperbarui",
+                        detail: val,
+                      });
+                    }}
+                    className={inputClass}
+                  />
+                  <span className="mt-1 block text-xs text-slate-500">
+                    Path publik internal (&apos;/aplikasi/Komryuu.apk&apos;) atau tautan file direct server.
+                  </span>
+                </label>
+
+                <label className="block text-sm text-slate-300">
+                  Catatan Pembaruan (Changelog)
+                  <textarea
+                    rows={3}
+                    value={settings.changelog ?? settings.appUpdate?.changelog ?? ""}
+                    placeholder="- Penambahan fitur sinkronisasi bookmark & history&#10;- Pembaruan ekstensi manga & bypass cloudflare&#10;- Peningkatan performa dan kestabilan"
+                    onChange={(event) => {
+                      const val = event.target.value;
+                      setSettings((prev) => ({
+                        ...prev,
+                        changelog: val,
+                        appUpdate: { ...prev.appUpdate, changelog: val },
+                      }));
+                      settingsRef.current.changelog = val;
+                    }}
+                    onBlur={() => {
+                      const val = (settingsRef.current.changelog || "").trim();
+                      const patch = handleUpdateRelease({ changelog: val });
+                      void savePatch(patch, {
+                        action: "Changelog rilis diperbarui",
+                        detail: val.slice(0, 50),
+                      });
+                    }}
+                    className={inputClass}
+                  />
+                  <span className="mt-1 block text-xs text-slate-500">
+                    Teks changelog yang ditampilkan di modal rilis aplikasi pengguna.
+                  </span>
+                </label>
+              </div>
+            </section>
+
+            {/* 3. SECTION: PENGUMUMAN & BROADCAST APLIKASI */}
+            <section className={settingCard}>
+              <div className="mb-5 flex items-start gap-3">
+                <span className="rounded-xl bg-amber-400/10 p-2.5 text-amber-300 border border-amber-400/20">
+                  <Megaphone size={22} weight="duotone" />
+                </span>
+                <div>
+                  <h2 className="text-lg font-semibold text-white">Pengumuman & Broadcast Aplikasi</h2>
+                  <p className="mt-0.5 text-sm text-slate-400">
+                    Kirim pesan siaran, banner pemberitahuan, atau peringatan darurat ke seluruh pengguna aplikasi mobile.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <label className={toggleCard}>
+                  <div>
+                    <span className="block font-medium text-white">Aktifkan Banner Pengumuman</span>
+                    <span className="mt-0.5 block text-xs text-slate-400">
+                      Tampilkan bilah pengumuman di beranda aplikasi Android.
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.appAnnouncement?.active ?? settings.broadcastBanner?.isActive ?? false}
+                    disabled={saving}
+                    onChange={(event) => {
+                      const nextActive = event.target.checked;
+                      const patch = handleUpdateAnnouncement({ active: nextActive });
+                      void savePatch(patch, {
+                        action: nextActive ? "Banner pengumuman diaktifkan" : "Banner pengumuman dinonaktifkan",
+                        detail: patch.appAnnouncement.title || patch.appAnnouncement.message || "",
+                      });
+                    }}
+                    className="h-5 w-5 accent-amber-400 cursor-pointer"
+                    aria-label="Aktifkan Banner Pengumuman"
+                  />
+                </label>
+
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="sm:col-span-2">
+                    <label className="block text-sm text-slate-300">
+                      Judul Pengumuman
+                      <input
+                        value={settings.appAnnouncement?.title ?? settings.broadcastBanner?.title ?? ""}
+                        placeholder="Contoh: Maintenance Ekstensi / Fitur Baru"
+                        onChange={(event) => {
+                          const val = event.target.value;
+                          setSettings((prev) => ({
+                            ...prev,
+                            appAnnouncement: { ...(prev.appAnnouncement || { active: false, title: "", message: "", type: "info" }), title: val },
+                            broadcastBanner: { ...prev.broadcastBanner, title: val },
+                          }));
+                          if (settingsRef.current.appAnnouncement) {
+                            settingsRef.current.appAnnouncement.title = val;
+                          }
+                          settingsRef.current.broadcastBanner.title = val;
+                        }}
+                        onBlur={() => {
+                          const title = settingsRef.current.appAnnouncement?.title ?? settingsRef.current.broadcastBanner.title;
+                          const patch = handleUpdateAnnouncement({ title });
+                          void savePatch(patch, {
+                            action: "Judul pengumuman diubah",
+                            detail: title,
+                          });
+                        }}
+                        className={inputClass}
+                      />
+                    </label>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-slate-300">
+                      Tipe Alert
+                      <select
+                        value={settings.appAnnouncement?.type ?? settings.broadcastBanner?.type ?? "info"}
+                        disabled={saving}
+                        onChange={(event) => {
+                          const nextType = event.target.value as AnnouncementType;
+                          const patch = handleUpdateAnnouncement({ type: nextType });
+                          void savePatch(patch, {
+                            action: "Tipe alert pengumuman diubah",
+                            detail: nextType,
+                          });
+                        }}
+                        className={inputClass}
+                      >
+                        <option value="info">Info (Biru/Informatif)</option>
+                        <option value="warning">Warning (Kuning/Peringatan)</option>
+                        <option value="update">Update (Hijau/Pembaruan)</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+
+                <label className="block text-sm text-slate-300">
+                  Pesan Pengumuman
+                  <textarea
+                    rows={3}
+                    value={settings.appAnnouncement?.message ?? settings.broadcastBanner?.message ?? ""}
+                    placeholder="Tulis pesan lengkap yang akan dibaca pengguna saat membuka aplikasi..."
+                    onChange={(event) => {
+                      const val = event.target.value;
+                      setSettings((prev) => ({
+                        ...prev,
+                        announcement: val,
+                        appAnnouncement: { ...(prev.appAnnouncement || { active: false, title: "", message: "", type: "info" }), message: val },
+                        broadcastBanner: { ...prev.broadcastBanner, message: val },
+                      }));
+                      if (settingsRef.current.appAnnouncement) {
+                        settingsRef.current.appAnnouncement.message = val;
+                      }
+                      settingsRef.current.broadcastBanner.message = val;
+                      settingsRef.current.announcement = val;
+                    }}
+                    onBlur={() => {
+                      const message = settingsRef.current.appAnnouncement?.message ?? settingsRef.current.broadcastBanner.message;
+                      const patch = handleUpdateAnnouncement({ message });
+                      void savePatch(patch, {
+                        action: "Pesan pengumuman diubah",
+                        detail: message.slice(0, 50),
+                      });
+                    }}
+                    className={inputClass}
+                  />
+                  <span className="mt-1 block text-xs text-slate-500">
+                    Tersimpan otomatis saat kursor meninggalkan kotak input (onBlur).
+                  </span>
                 </label>
               </div>
             </section>
@@ -536,13 +729,13 @@ export default function SettingPages() {
             {/* 4. SECTION: AKSES API EKSTERNAL */}
             <section className={settingCard}>
               <div className="mb-5 flex items-start gap-3">
-                <span className="rounded-xl bg-violet-400/10 p-2.5 text-violet-300">
+                <span className="rounded-xl bg-violet-400/10 p-2.5 text-violet-300 border border-violet-400/20">
                   <Key size={22} weight="duotone" />
                 </span>
                 <div>
-                  <h2 className="text-lg font-semibold">Akses API Eksternal</h2>
+                  <h2 className="text-lg font-semibold text-white">Akses API Eksternal & Keamanan</h2>
                   <p className="mt-0.5 text-sm text-slate-400">
-                    Otorisasi request dari aplikasi Android via header <code className="text-sky-300">x-api-key</code>.
+                    Otorisasi request dari aplikasi Android via header <code className="text-indigo-300">x-api-key</code>.
                   </p>
                 </div>
               </div>
@@ -555,10 +748,10 @@ export default function SettingPages() {
                     value={generatedKey}
                     placeholder={
                       settings.externalApiKeyHash
-                        ? "Key tersimpan (hash SHA-256). Rotasi untuk membuat key baru."
+                        ? "API Key aktif tersimpan (SHA-256 hash). Tekan Rotate Key untuk membuat kunci baru."
                         : "Belum ada API key terdaftar"
                     }
-                    className="w-full rounded-lg border border-white/[0.09] bg-[#14141e] py-2.5 pl-10 pr-3 font-mono text-xs text-slate-200 outline-none"
+                    className="w-full rounded-lg border border-white/10 bg-[#14141e] py-2.5 pl-10 pr-3 font-mono text-xs text-slate-200 outline-none"
                     aria-label="External API Key"
                   />
                 </div>
@@ -566,7 +759,7 @@ export default function SettingPages() {
                   <button
                     type="button"
                     onClick={() => void copyApiKey()}
-                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/[0.09] bg-[#14141e] px-4 py-2.5 text-sm text-slate-200 hover:bg-white/[0.05]"
+                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-[#14141e] px-4 py-2.5 text-sm text-slate-200 hover:bg-white/[0.05]"
                   >
                     <Copy size={17} />
                     Salin
@@ -576,7 +769,7 @@ export default function SettingPages() {
                   type="button"
                   onClick={() => void generateApiKey()}
                   disabled={generatingKey || saving}
-                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-sky-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-sky-400 disabled:opacity-50 transition"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/30 hover:bg-indigo-500 disabled:opacity-50 transition"
                 >
                   <Key size={17} />
                   {generatingKey ? "Membuat..." : "Generate / Rotate Key"}
@@ -588,7 +781,7 @@ export default function SettingPages() {
 
               <div className="mt-5 grid gap-4 sm:grid-cols-2">
                 <label className="block text-sm text-slate-300">
-                  Rate Limit (request/menit)
+                  Rate Limit (request / menit)
                   <input
                     type="number"
                     min={1}
@@ -617,11 +810,11 @@ export default function SettingPages() {
             {/* 5. SECTION: KONTEN DAN PREFERENSI */}
             <section className={settingCard}>
               <div className="mb-5 flex items-start gap-3">
-                <span className="rounded-xl bg-emerald-400/10 p-2.5 text-emerald-300">
+                <span className="rounded-xl bg-emerald-400/10 p-2.5 text-emerald-300 border border-emerald-400/20">
                   <Warning size={22} weight="duotone" />
                 </span>
                 <div>
-                  <h2 className="text-lg font-semibold">Konten & Kebijakan Aplikasi</h2>
+                  <h2 className="text-lg font-semibold text-white">Konten & Kebijakan Aplikasi</h2>
                   <p className="mt-0.5 text-sm text-slate-400">Preferensi global pembatasan fitur dan registrasi.</p>
                 </div>
               </div>
@@ -629,7 +822,7 @@ export default function SettingPages() {
               <div className="space-y-3">
                 <label className={toggleCard}>
                   <div>
-                    <span className="block font-medium">Izinkan Registrasi Pengguna Baru</span>
+                    <span className="block font-medium text-white">Izinkan Registrasi Pengguna Baru</span>
                     <span className="mt-0.5 block text-xs text-slate-400">Kontrol endpoint registrasi akun aplikasi.</span>
                   </div>
                   <input
@@ -643,7 +836,7 @@ export default function SettingPages() {
                 </label>
                 <label className={toggleCard}>
                   <div>
-                    <span className="block font-medium">Tampilkan Konten Dewasa / NSFW 18+</span>
+                    <span className="block font-medium text-white">Tampilkan Konten Dewasa / NSFW 18+</span>
                     <span className="mt-0.5 block text-xs text-slate-400">Default global filter untuk API eksternal.</span>
                   </div>
                   <input
@@ -683,15 +876,15 @@ export default function SettingPages() {
             <section className="rounded-2xl border border-rose-500/20 bg-rose-950/10 p-5 md:p-6">
               <div className="mb-5">
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-300">Danger Zone</p>
-                <h2 className="mt-1 text-lg font-semibold">Utilitas & Backup Database</h2>
-                <p className="mt-0.5 text-sm text-slate-400">Backup mencakup koleksi EXTENSION dan SETTINGS.</p>
+                <h2 className="mt-1 text-lg font-semibold text-white">Utilitas & Backup Database</h2>
+                <p className="mt-0.5 text-sm text-slate-400">Backup mencakup seluruh koleksi EXTENSION dan SETTINGS.</p>
               </div>
               <div className="flex flex-col gap-3 sm:flex-row">
                 <button
                   type="button"
                   onClick={() => void exportBackup()}
                   disabled={saving}
-                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/[0.09] bg-[#14141e] px-4 py-2.5 text-sm text-slate-200 hover:bg-white/[0.05] disabled:opacity-50 transition"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-[#14141e] px-4 py-2.5 text-sm text-slate-200 hover:bg-white/[0.05] disabled:opacity-50 transition"
                 >
                   <DownloadSimple size={18} />
                   {saving ? "Memproses..." : "Export Backup Data (JSON)"}
@@ -714,14 +907,14 @@ export default function SettingPages() {
       </div>
 
       {resetConfirmationOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
           <section
             role="dialog"
             aria-modal="true"
             aria-labelledby="reset-dialog-title"
-            className="w-full max-w-md rounded-2xl border border-white/[0.09] bg-[#1b1b28] p-6 shadow-2xl"
+            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#1c1c28] p-6 shadow-2xl"
           >
-            <h2 id="reset-dialog-title" className="text-xl font-semibold">Reset semua pengaturan?</h2>
+            <h2 id="reset-dialog-title" className="text-xl font-semibold text-white">Reset semua pengaturan?</h2>
             <p className="mt-2 text-sm text-slate-400">
               Nilai SETTINGS/app_config akan diganti dengan default dan API key eksternal yang aktif akan dicabut.
             </p>
@@ -730,7 +923,7 @@ export default function SettingPages() {
                 type="button"
                 onClick={() => setResetConfirmationOpen(false)}
                 disabled={saving}
-                className="rounded-lg border border-white/[0.09] px-4 py-2 text-sm text-slate-300 hover:bg-white/[0.05]"
+                className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 hover:bg-white/10"
               >
                 Batal
               </button>
@@ -738,7 +931,7 @@ export default function SettingPages() {
                 type="button"
                 onClick={() => void resetSettings()}
                 disabled={saving}
-                className="inline-flex items-center gap-2 rounded-lg bg-rose-500 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-400 disabled:opacity-50"
+                className="inline-flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500 disabled:opacity-50"
               >
                 <Check size={16} />
                 {saving ? "Mereset..." : "Ya, reset"}

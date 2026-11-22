@@ -13,6 +13,7 @@ import {
   BarChart3,
   CheckCircle2,
   Clock,
+  Crown,
   Download,
   ExternalLink,
   Flame,
@@ -51,6 +52,7 @@ type UserRecord = {
   role: string;
   isBanned: boolean;
   provider: string;
+  vipExpiresAt?: unknown;
   createdAt: unknown;
 };
 
@@ -103,6 +105,7 @@ export default function Dashboardpages({ onNavigate, onLogout }: DashboardPagesP
                 role: typeof data.role === "string" ? data.role.toLowerCase() : "user",
                 isBanned: data.isBanned === true,
                 provider: typeof data.provider === "string" ? data.provider.toLowerCase() : "google",
+                vipExpiresAt: data.vipExpiresAt,
                 createdAt: data.createdAt,
               };
             })
@@ -225,6 +228,12 @@ export default function Dashboardpages({ onNavigate, onLogout }: DashboardPagesP
 
     const admins = users.filter((u) => u.role === "admin" || u.role === "moderator").length;
     const vips = users.filter((u) => u.role === "vip").length;
+    const activeVips = users.filter((u) => {
+      if (u.role !== "vip" || u.isBanned) return false;
+      if (!u.vipExpiresAt) return true; // permanent VIP
+      const d = parseDate(u.vipExpiresAt);
+      return !d || d.getTime() > Date.now();
+    }).length;
     const standard = users.filter((u) => u.role !== "admin" && u.role !== "moderator" && u.role !== "vip").length;
 
     const googleUsers = users.filter((u) => u.provider === "google").length;
@@ -237,6 +246,7 @@ export default function Dashboardpages({ onNavigate, onLogout }: DashboardPagesP
       bannedPercent: Math.round((banned / total) * 100),
       admins,
       vips,
+      activeVips,
       standard,
       googleUsers,
       guestUsers,
@@ -374,14 +384,17 @@ export default function Dashboardpages({ onNavigate, onLogout }: DashboardPagesP
         )}
 
         {/* TOP METRIC CARDS */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-5 transition hover:border-indigo-500/30">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <div
+            onClick={() => onNavigate?.("users")}
+            className="cursor-pointer rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-5 transition hover:border-indigo-500/40 hover:bg-[#1f1f2d]"
+          >
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs font-medium text-slate-400">Total Pengguna</p>
                 <p className="mt-2 text-3xl font-bold text-white">{loading ? "—" : users.length}</p>
                 <p className="mt-1 text-[11px] text-emerald-400 font-medium">
-                  {distribution.active} Aktif • {distribution.banned} Dibanned
+                  {distribution.active} Aktif • {distribution.banned} Banned
                 </p>
               </div>
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/10 text-indigo-400">
@@ -390,7 +403,28 @@ export default function Dashboardpages({ onNavigate, onLogout }: DashboardPagesP
             </div>
           </div>
 
-          <div className="rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-5 transition hover:border-violet-500/30">
+          <div
+            onClick={() => onNavigate?.("users")}
+            className="cursor-pointer rounded-2xl border border-purple-500/20 bg-gradient-to-br from-[#1c1c28] to-purple-950/20 p-5 transition hover:border-purple-500/40 hover:shadow-lg hover:shadow-purple-500/10"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-medium text-purple-300">Pengguna VIP Aktif</p>
+                <p className="mt-2 text-3xl font-bold text-purple-200">{loading ? "—" : distribution.activeVips}</p>
+                <p className="mt-1 text-[11px] text-purple-400 font-medium">
+                  {distribution.vips} Terdaftar • Bebas Limit
+                </p>
+              </div>
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-purple-500/15 text-purple-300 border border-purple-500/30">
+                <Crown size={24} />
+              </div>
+            </div>
+          </div>
+
+          <div
+            onClick={() => onNavigate?.("extensi")}
+            className="cursor-pointer rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-5 transition hover:border-violet-500/40 hover:bg-[#1f1f2d]"
+          >
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs font-medium text-slate-400">Ekstensi Sumber</p>
@@ -405,24 +439,31 @@ export default function Dashboardpages({ onNavigate, onLogout }: DashboardPagesP
             </div>
           </div>
 
-          <div className="rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-5 transition hover:border-amber-500/30">
+          <div
+            onClick={() => onNavigate?.("reports")}
+            className="cursor-pointer rounded-2xl border border-amber-500/20 bg-gradient-to-br from-[#1c1c28] to-amber-950/20 p-5 transition hover:border-amber-500/40 hover:shadow-lg hover:shadow-amber-500/10"
+          >
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs font-medium text-slate-400">Tiket Masalah Pending</p>
+                <p className="text-xs font-medium text-amber-300">Tiket Masalah Menunggu</p>
                 <p className="mt-2 text-3xl font-bold text-amber-300">
                   {loading ? "—" : pendingReportsCount}
                 </p>
-                <p className="mt-1 text-[11px] text-slate-400 font-medium">
-                  {reports.length} Total Laporan Masuk
+                <p className="mt-1 text-[11px] text-slate-400 font-medium flex items-center gap-1 group-hover:text-amber-200">
+                  <span>Buka Antrean Tiket</span>
+                  <ArrowRight size={11} />
                 </p>
               </div>
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/15 text-amber-400 border border-amber-500/30">
                 <Inbox size={24} />
               </div>
             </div>
           </div>
 
-          <div className="rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-5 transition hover:border-emerald-500/30">
+          <div
+            onClick={() => onNavigate?.("settings")}
+            className="cursor-pointer rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-5 transition hover:border-emerald-500/40 hover:bg-[#1f1f2d]"
+          >
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs font-medium text-slate-400">Mode Sistem</p>

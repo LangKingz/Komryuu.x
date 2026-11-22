@@ -130,6 +130,7 @@ type UserRecord = {
   history?: ReadingHistory[];
   createdAt: unknown;
   lastLoginAt: unknown;
+  vipExpiresAt?: unknown;
 };
 
 function toText(value: unknown): string {
@@ -374,7 +375,25 @@ function toUser(id: string, data: Record<string, unknown>): UserRecord {
     history,
     createdAt: data.createdAt,
     lastLoginAt: data.lastLoginAt,
+    vipExpiresAt: data.vipExpiresAt,
   };
+}
+
+function getVipBadgeInfo(user: UserRecord) {
+  if (user.role !== "vip") return null;
+  if (!user.vipExpiresAt) {
+    return { text: "VIP • Permanen", isExpired: false, badgeClass: "border-purple-400/40 bg-purple-400/15 text-purple-300" };
+  }
+  const d = parseDate(user.vipExpiresAt);
+  if (!d) {
+    return { text: "VIP • Permanen", isExpired: false, badgeClass: "border-purple-400/40 bg-purple-400/15 text-purple-300" };
+  }
+  const diffMs = d.getTime() - Date.now();
+  if (diffMs <= 0) {
+    return { text: "VIP Kedaluwarsa", isExpired: true, badgeClass: "border-rose-400/40 bg-rose-400/15 text-rose-300" };
+  }
+  const days = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+  return { text: `VIP • ${days} Hari Lagi`, isExpired: false, badgeClass: "border-purple-400/40 bg-purple-400/15 text-purple-300" };
 }
 
 function relativeTime(value: unknown): string {
@@ -437,6 +456,7 @@ export default function UserPages() {
   const [customReason, setCustomReason] = useState("");
   const [targetRole, setTargetRole] = useState<UserRole>("user");
   const [targetPermissions, setTargetPermissions] = useState<UserPermissions>(ROLE_DEFAULT_PERMISSIONS.user);
+  const [vipDuration, setVipDuration] = useState<"7" | "30" | "90" | "permanent">("30");
   const [busy, setBusy] = useState(false);
 
   // State untuk modal sinkronisasi user
@@ -513,6 +533,26 @@ export default function UserPages() {
     setCustomReason("");
     setTargetRole(user.role);
     setTargetPermissions({ ...user.permissions });
+
+    if (type === "role") {
+      if (user.role === "vip") {
+        if (!user.vipExpiresAt) {
+          setVipDuration("permanent");
+        } else {
+          const d = parseDate(user.vipExpiresAt);
+          if (!d) {
+            setVipDuration("permanent");
+          } else {
+            const days = Math.ceil((d.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+            if (days <= 7) setVipDuration("7");
+            else if (days <= 30) setVipDuration("30");
+            else setVipDuration("90");
+          }
+        }
+      } else {
+        setVipDuration("30");
+      }
+    }
 
     if (type === "sync") {
       setSyncTab("library");
@@ -761,13 +801,32 @@ export default function UserPages() {
     if (!selected) return;
     setBusy(true);
     try {
+      let calculatedVipExpiresAt: string | null = null;
+      if (targetRole === "vip") {
+        if (vipDuration === "7") {
+          calculatedVipExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+        } else if (vipDuration === "30") {
+          calculatedVipExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+        } else if (vipDuration === "90") {
+          calculatedVipExpiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
+        } else {
+          calculatedVipExpiresAt = null;
+        }
+      }
+
       await updateDoc(doc(db, "USERS", selected.id), {
         role: targetRole,
+        vipExpiresAt: calculatedVipExpiresAt,
         permissions: targetPermissions,
+        updatedAt: serverTimestamp(),
       });
       await logActivity(
         "Role & hak akses diubah",
-        `${selected.name || selected.email}: Role=${targetRole}`,
+        `${selected.name || selected.email}: Role=${targetRole}${
+          targetRole === "vip"
+            ? ` (Masa aktif: ${vipDuration === "permanent" ? "Permanen" : `${vipDuration} Hari`})`
+            : ""
+        }`,
         selected.id
       );
       setToast({ kind: "success", message: `Role dan hak akses untuk ${selected.name || selected.email} berhasil diperbarui.` });
@@ -998,21 +1057,26 @@ export default function UserPages() {
 
                       {/* 4. Role & Hak Akses */}
                       <td className="px-5 py-4">
-                        <button
-                          type="button"
-                          onClick={() => openModal("role", user)}
-                          className={`group inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition ${roleBadgeClass(
-                            user.role
-                          )}`}
-                          title="Klik untuk ubah role & permissions"
-                        >
-                          {user.role === "admin" && <ShieldCheck size={14} weight="fill" />}
-                          {user.role === "moderator" && <ShieldWarning size={14} weight="fill" />}
-                          {user.role === "vip" && <Crown size={14} weight="fill" />}
-                          {user.role === "user" && <User size={14} weight="bold" />}
-                          <span>{roleLabel(user.role)}</span>
-                          <PencilSimple size={12} className="opacity-0 group-hover:opacity-100 transition" />
-                        </button>
+                        {(() => {
+                          const vipInfo = getVipBadgeInfo(user);
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => openModal("role", user)}
+                              className={`group inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition ${
+                                vipInfo ? vipInfo.badgeClass : roleBadgeClass(user.role)
+                              }`}
+                              title="Klik untuk ubah role & permissions"
+                            >
+                              {user.role === "admin" && <ShieldCheck size={14} weight="fill" />}
+                              {user.role === "moderator" && <ShieldWarning size={14} weight="fill" />}
+                              {user.role === "vip" && <Crown size={14} weight="fill" />}
+                              {user.role === "user" && <User size={14} weight="bold" />}
+                              <span>{vipInfo ? vipInfo.text : roleLabel(user.role)}</span>
+                              <PencilSimple size={12} className="opacity-0 group-hover:opacity-100 transition" />
+                            </button>
+                          );
+                        })()}
                       </td>
 
                       {/* 5. Cloud Sync Monitoring */}
@@ -1145,6 +1209,55 @@ export default function UserPages() {
                       <option value="user">User Standar (Pengguna aplikasi biasa)</option>
                     </select>
                   </div>
+
+                  {/* Pilihan Masa Aktif VIP */}
+                  {targetRole === "vip" && (
+                    <div className="rounded-xl border border-purple-500/20 bg-purple-950/20 p-4 space-y-3">
+                      <div className="flex items-center gap-2">
+                        <Crown size={18} className="text-purple-400" weight="fill" />
+                        <p className="text-sm font-semibold text-white">Pilih Durasi Masa Aktif VIP</p>
+                      </div>
+                      <p className="text-xs text-slate-400">
+                        Setelah durasi habis, role pengguna otomatis diturunkan kembali menjadi User Standar saat login berikutnya.
+                      </p>
+
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        {[
+                          { id: "7" as const, label: "7 Hari", sub: "1 Minggu" },
+                          { id: "30" as const, label: "30 Hari", sub: "1 Bulan" },
+                          { id: "90" as const, label: "90 Hari", sub: "3 Bulan" },
+                          { id: "permanent" as const, label: "Permanen", sub: "Selamanya" },
+                        ].map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setVipDuration(opt.id)}
+                            className={`rounded-xl border p-2.5 text-center transition ${
+                              vipDuration === opt.id
+                                ? "border-purple-400 bg-purple-500/20 text-white shadow-md shadow-purple-500/20"
+                                : "border-white/10 bg-[#14141e] text-slate-400 hover:border-white/20 hover:text-white"
+                            }`}
+                          >
+                            <span className="block text-xs font-bold">{opt.label}</span>
+                            <span className="block text-[10px] text-slate-400">{opt.sub}</span>
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="rounded-lg bg-[#14141e] px-3 py-2 text-xs text-slate-300 flex items-center justify-between">
+                        <span className="text-slate-400">Masa Aktif Berakhir:</span>
+                        <span className="font-semibold text-purple-300">
+                          {vipDuration === "permanent"
+                            ? "Tidak pernah (Permanen)"
+                            : new Date(Date.now() + Number(vipDuration) * 24 * 60 * 60 * 1000).toLocaleDateString("id-ID", {
+                                day: "numeric",
+                                month: "long",
+                                year: "numeric",
+                              })}
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Permissions Checklist */}
                   <div className="rounded-xl border border-white/[0.07] bg-[#14141e] p-4">

@@ -1,3 +1,12 @@
+export type AnnouncementType = "info" | "warning" | "update";
+
+export type Announcement = {
+  active: boolean;
+  title: string;
+  message: string;
+  type: AnnouncementType;
+};
+
 export type BroadcastBanner = {
   isActive: boolean;
   title: string;
@@ -8,15 +17,24 @@ export type BroadcastBanner = {
 export type AppUpdate = {
   minAppVersion: string;
   latestAppVersion: string;
+  latestVersion?: string;
+  minVersionCode: number;
   forceUpdate: boolean;
   downloadUrl: string;
+  apkUrl?: string;
   changelog: string;
 };
 
 export type AppSettings = {
   maintenanceMode: boolean;
   maintenanceMessage: string;
+  latestVersion?: string;
+  minVersionCode?: number;
+  forceUpdate?: boolean;
+  changelog?: string;
+  apkUrl?: string;
   announcement: string;
+  appAnnouncement?: Announcement;
   externalApiKeyHash: string;
   rateLimitPerMinute: number;
   extensionCacheTtlSeconds: number;
@@ -35,18 +53,34 @@ export const DEFAULT_BROADCAST_BANNER: BroadcastBanner = {
   type: "info",
 };
 
+export const DEFAULT_ANNOUNCEMENT: Announcement = {
+  active: false,
+  title: "",
+  message: "",
+  type: "info",
+};
+
 export const DEFAULT_APP_UPDATE: AppUpdate = {
   minAppVersion: "1.0.0",
-  latestAppVersion: "1.0.0",
+  latestAppVersion: "1.2.0",
+  latestVersion: "1.2.0",
+  minVersionCode: 1,
   forceUpdate: false,
   downloadUrl: "/aplikasi/Komryuu.apk",
+  apkUrl: "/aplikasi/Komryuu.apk",
   changelog: "",
 };
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   maintenanceMode: false,
   maintenanceMessage: "Aplikasi sedang dalam pemeliharaan. Silakan coba kembali nanti.",
+  latestVersion: "1.2.0",
+  minVersionCode: 1,
+  forceUpdate: false,
+  changelog: "",
+  apkUrl: "/aplikasi/Komryuu.apk",
   announcement: "",
+  appAnnouncement: DEFAULT_ANNOUNCEMENT,
   externalApiKeyHash: "",
   rateLimitPerMinute: 60,
   extensionCacheTtlSeconds: 30,
@@ -64,13 +98,96 @@ export function normalizeAppSettings(value: Record<string, unknown>): AppSetting
       ? value.defaultCategory
       : "komik";
 
+  const rawUpdate = (typeof value.appUpdate === "object" && value.appUpdate !== null)
+    ? (value.appUpdate as Record<string, unknown>)
+    : {};
+
+  const latestVersion =
+    typeof rawUpdate.latestVersion === "string" && rawUpdate.latestVersion
+      ? rawUpdate.latestVersion
+      : typeof rawUpdate.latestAppVersion === "string" && rawUpdate.latestAppVersion
+      ? rawUpdate.latestAppVersion
+      : typeof value.latestVersion === "string" && value.latestVersion
+      ? value.latestVersion
+      : DEFAULT_APP_UPDATE.latestAppVersion;
+
+  const minVersionCode =
+    typeof rawUpdate.minVersionCode === "number" && !isNaN(rawUpdate.minVersionCode)
+      ? rawUpdate.minVersionCode
+      : typeof value.minVersionCode === "number" && !isNaN(value.minVersionCode)
+      ? value.minVersionCode
+      : DEFAULT_APP_UPDATE.minVersionCode;
+
+  const forceUpdate =
+    rawUpdate.forceUpdate === true || value.forceUpdate === true;
+
+  const apkUrl =
+    typeof rawUpdate.apkUrl === "string" && rawUpdate.apkUrl
+      ? rawUpdate.apkUrl
+      : typeof rawUpdate.downloadUrl === "string" && rawUpdate.downloadUrl
+      ? rawUpdate.downloadUrl
+      : typeof value.apkUrl === "string" && value.apkUrl
+      ? value.apkUrl
+      : DEFAULT_APP_UPDATE.downloadUrl;
+
+  const changelog =
+    typeof rawUpdate.changelog === "string"
+      ? rawUpdate.changelog
+      : typeof value.changelog === "string"
+      ? value.changelog
+      : "";
+
+  const minAppVersion =
+    typeof rawUpdate.minAppVersion === "string"
+      ? rawUpdate.minAppVersion
+      : typeof value.minimumAppVersion === "string"
+      ? value.minimumAppVersion
+      : DEFAULT_APP_UPDATE.minAppVersion;
+
+  const rawBanner = (typeof value.broadcastBanner === "object" && value.broadcastBanner !== null)
+    ? (value.broadcastBanner as Record<string, unknown>)
+    : {};
+  const rawAnnouncement = (typeof value.announcement === "object" && value.announcement !== null)
+    ? (value.announcement as Record<string, unknown>)
+    : {};
+
+  const bannerActive =
+    rawBanner.isActive === true || rawBanner.active === true || rawAnnouncement.active === true;
+
+  const bannerTitle =
+    typeof rawBanner.title === "string" ? rawBanner.title :
+    typeof rawAnnouncement.title === "string" ? rawAnnouncement.title :
+    "";
+
+  const bannerMessage =
+    typeof rawBanner.message === "string" ? rawBanner.message :
+    typeof rawAnnouncement.message === "string" ? rawAnnouncement.message :
+    typeof value.announcement === "string" ? value.announcement :
+    "";
+
+  const rawType = String(rawBanner.type || rawAnnouncement.type || "info").toLowerCase();
+  const bannerType: "info" | "warning" | "update" =
+    rawType === "warning" || rawType === "urgent" ? "warning" :
+    rawType === "update" ? "update" : "info";
+
   return {
     maintenanceMode: value.maintenanceMode === true,
     maintenanceMessage:
       typeof value.maintenanceMessage === "string"
         ? value.maintenanceMessage
         : DEFAULT_APP_SETTINGS.maintenanceMessage,
-    announcement: typeof value.announcement === "string" ? value.announcement : "",
+    latestVersion,
+    minVersionCode,
+    forceUpdate,
+    changelog,
+    apkUrl,
+    announcement: bannerMessage,
+    appAnnouncement: {
+      active: bannerActive,
+      title: bannerTitle,
+      message: bannerMessage,
+      type: bannerType,
+    },
     externalApiKeyHash:
       typeof value.externalApiKeyHash === "string" ? value.externalApiKeyHash : "",
     rateLimitPerMinute:
@@ -90,68 +207,22 @@ export function normalizeAppSettings(value: Record<string, unknown>): AppSetting
     allowRegistration: value.allowRegistration !== false,
     showNsfw: value.showNsfw === true,
     defaultCategory,
-    minimumAppVersion:
-      typeof value.minimumAppVersion === "string"
-        ? value.minimumAppVersion
-        : DEFAULT_APP_SETTINGS.minimumAppVersion,
+    minimumAppVersion: minAppVersion,
     broadcastBanner: {
-      isActive:
-        typeof value.broadcastBanner === "object" &&
-        value.broadcastBanner !== null &&
-        "isActive" in value.broadcastBanner
-          ? (value.broadcastBanner as Record<string, unknown>).isActive === true
-          : false,
-      title:
-        typeof value.broadcastBanner === "object" &&
-        value.broadcastBanner !== null &&
-        typeof (value.broadcastBanner as Record<string, unknown>).title === "string"
-          ? ((value.broadcastBanner as Record<string, unknown>).title as string)
-          : (typeof value.announcement === "string" && value.announcement ? "Pengumuman" : ""),
-      message:
-        typeof value.broadcastBanner === "object" &&
-        value.broadcastBanner !== null &&
-        typeof (value.broadcastBanner as Record<string, unknown>).message === "string"
-          ? ((value.broadcastBanner as Record<string, unknown>).message as string)
-          : (typeof value.announcement === "string" ? value.announcement : ""),
-      type:
-        typeof value.broadcastBanner === "object" &&
-        value.broadcastBanner !== null &&
-        typeof (value.broadcastBanner as Record<string, unknown>).type === "string"
-          ? ((value.broadcastBanner as Record<string, unknown>).type as string)
-          : "info",
+      isActive: bannerActive,
+      title: bannerTitle,
+      message: bannerMessage,
+      type: bannerType,
     },
     appUpdate: {
-      minAppVersion:
-        typeof value.appUpdate === "object" &&
-        value.appUpdate !== null &&
-        typeof (value.appUpdate as Record<string, unknown>).minAppVersion === "string"
-          ? ((value.appUpdate as Record<string, unknown>).minAppVersion as string)
-          : (typeof value.minimumAppVersion === "string" ? value.minimumAppVersion : DEFAULT_APP_UPDATE.minAppVersion),
-      latestAppVersion:
-        typeof value.appUpdate === "object" &&
-        value.appUpdate !== null &&
-        typeof (value.appUpdate as Record<string, unknown>).latestAppVersion === "string"
-          ? ((value.appUpdate as Record<string, unknown>).latestAppVersion as string)
-          : (typeof value.minimumAppVersion === "string" ? value.minimumAppVersion : DEFAULT_APP_UPDATE.latestAppVersion),
-      forceUpdate:
-        typeof value.appUpdate === "object" &&
-        value.appUpdate !== null &&
-        "forceUpdate" in value.appUpdate
-          ? (value.appUpdate as Record<string, unknown>).forceUpdate === true
-          : false,
-      downloadUrl:
-        typeof value.appUpdate === "object" &&
-        value.appUpdate !== null &&
-        typeof (value.appUpdate as Record<string, unknown>).downloadUrl === "string" &&
-        (value.appUpdate as Record<string, unknown>).downloadUrl
-          ? ((value.appUpdate as Record<string, unknown>).downloadUrl as string)
-          : "/aplikasi/Komryuu.apk",
-      changelog:
-        typeof value.appUpdate === "object" &&
-        value.appUpdate !== null &&
-        typeof (value.appUpdate as Record<string, unknown>).changelog === "string"
-          ? ((value.appUpdate as Record<string, unknown>).changelog as string)
-          : "",
+      minAppVersion,
+      latestAppVersion: latestVersion,
+      latestVersion,
+      minVersionCode,
+      forceUpdate,
+      downloadUrl: apkUrl,
+      apkUrl,
+      changelog,
     },
   };
 }

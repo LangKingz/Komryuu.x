@@ -62,6 +62,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function parseDate(value: unknown): Date | null {
+  if (value instanceof Date) return value;
+  if (typeof value === "string" || typeof value === "number") {
+    const d = new Date(value);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  if (value && typeof value === "object" && "toDate" in value) {
+    const toDate = (value as { toDate?: unknown }).toDate;
+    if (typeof toDate === "function") {
+      const d = toDate.call(value);
+      if (d instanceof Date && !isNaN(d.getTime())) return d;
+    }
+  }
+  return null;
+}
+
 function normalizePermissions(
   role: string,
   rawPermissions: unknown
@@ -215,7 +231,31 @@ export async function POST(request: Request) {
     const saved = await getDoc(userReference);
     const rawData = saved.exists() ? (saved.data() as Record<string, unknown>) : {};
 
-    const rawRole = typeof rawData.role === "string" ? rawData.role.toLowerCase() : "user";
+    let rawRole = typeof rawData.role === "string" ? rawData.role.toLowerCase() : "user";
+    let vipExpiresAt: string | null = null;
+    if (rawData.vipExpiresAt) {
+      const parsedDate = parseDate(rawData.vipExpiresAt);
+      if (parsedDate) {
+        vipExpiresAt = parsedDate.toISOString();
+      }
+    }
+
+    // Periksa jika role === "vip" dan vipExpiresAt sudah melewati waktu sekarang
+    if (rawRole === "vip" && vipExpiresAt) {
+      const expiresDate = new Date(vipExpiresAt);
+      if (new Date() > expiresDate) {
+        // Otomatis turunkan role menjadi user dan hapus vipExpiresAt di Firestore
+        await updateDoc(userReference, {
+          role: "user",
+          vipExpiresAt: null,
+          permissions: ROLE_DEFAULT_PERMISSIONS.user,
+          updatedAt: serverTimestamp(),
+        });
+        rawRole = "user";
+        vipExpiresAt = null;
+      }
+    }
+
     const role =
       rawRole === "admin" || rawRole === "moderator" || rawRole === "vip"
         ? rawRole
@@ -230,6 +270,7 @@ export async function POST(request: Request) {
       provider: typeof rawData.provider === "string" ? rawData.provider : provider,
       deviceInfo: isRecord(rawData.deviceInfo) ? rawData.deviceInfo : deviceInfo,
       role,
+      vipExpiresAt: role === "vip" ? vipExpiresAt : null,
       permissions,
       isBanned: rawData.isBanned === true,
       banReason: typeof rawData.banReason === "string" ? rawData.banReason : "",

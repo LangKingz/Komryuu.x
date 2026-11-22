@@ -23,6 +23,8 @@ type UserProfile = {
   photoUrl?: string;
   provider?: string;
   role?: string;
+  vipExpiresAt?: string | null;
+  vipDaysLeft?: number | null;
   permissions?: unknown;
   status: string;
   isBanned?: boolean;
@@ -56,6 +58,28 @@ function toUserProfile(data: Record<string, unknown>): UserProfile {
   const isBanned = data.isBanned === true;
   const status = isBanned ? "banned" : typeof data.status === "string" ? data.status : "active";
 
+  let vipExpiresAt: string | null = null;
+  let vipDaysLeft: number | null = null;
+  if (data.vipExpiresAt) {
+    if (typeof data.vipExpiresAt === "string") {
+      vipExpiresAt = data.vipExpiresAt;
+    } else if (data.vipExpiresAt instanceof Date) {
+      vipExpiresAt = data.vipExpiresAt.toISOString();
+    } else if (typeof data.vipExpiresAt === "object" && data.vipExpiresAt !== null && "toDate" in data.vipExpiresAt) {
+      const toDate = (data.vipExpiresAt as { toDate?: unknown }).toDate;
+      if (typeof toDate === "function") {
+        const d = toDate.call(data.vipExpiresAt);
+        if (d instanceof Date) vipExpiresAt = d.toISOString();
+      }
+    }
+    if (vipExpiresAt) {
+      const expDate = new Date(vipExpiresAt);
+      if (!isNaN(expDate.getTime())) {
+        vipDaysLeft = Math.max(0, Math.ceil((expDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
+      }
+    }
+  }
+
   return {
     id: typeof data.id === "string" ? data.id : typeof data.uid === "string" ? data.uid : "",
     uid: typeof data.uid === "string" ? data.uid : typeof data.id === "string" ? data.id : "",
@@ -64,6 +88,8 @@ function toUserProfile(data: Record<string, unknown>): UserProfile {
     ...(typeof data.photoUrl === "string" ? { photoUrl: data.photoUrl } : {}),
     ...(typeof data.provider === "string" ? { provider: data.provider } : {}),
     role: typeof data.role === "string" ? data.role : "user",
+    vipExpiresAt,
+    vipDaysLeft,
     ...(data.permissions ? { permissions: data.permissions } : {}),
     status,
     isBanned,
@@ -277,6 +303,36 @@ export async function PUT(request: Request) {
         return NextResponse.json({ success: false, error: "password must be between 8 and 128 characters" }, { status: 400 });
       }
       Object.assign(updates, hashPassword(body.password));
+    }
+    if (body.role !== undefined) {
+      if (typeof body.role === "string") {
+        const validRoles = ["admin", "moderator", "vip", "user"];
+        const lowerRole = body.role.toLowerCase();
+        if (validRoles.includes(lowerRole)) {
+          updates.role = lowerRole;
+          if (lowerRole === "vip") {
+            if (body.vipExpiresAt !== undefined) {
+              updates.vipExpiresAt = body.vipExpiresAt;
+            } else if (body.vipDuration !== undefined) {
+              if (body.vipDuration === "permanent" || body.vipDuration === "permanen" || body.vipDuration === null) {
+                updates.vipExpiresAt = null;
+              } else {
+                const days = Number(body.vipDuration);
+                if (!isNaN(days) && days > 0) {
+                  updates.vipExpiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+                }
+              }
+            }
+          } else {
+            updates.vipExpiresAt = null;
+          }
+        } else {
+          return NextResponse.json({ success: false, error: "Invalid role" }, { status: 400 });
+        }
+      }
+    }
+    if (body.vipExpiresAt !== undefined && updates.vipExpiresAt === undefined) {
+      updates.vipExpiresAt = body.vipExpiresAt;
     }
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ success: false, error: "At least one editable field is required" }, { status: 400 });
