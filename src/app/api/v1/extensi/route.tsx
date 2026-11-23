@@ -203,6 +203,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const type = searchParams.get("type");
   const requestedLimit = searchParams.get("limit");
+  const includeInactive = searchParams.get("includeInactive") === "true";
 
   if (type && !isExtensionType(type)) {
     return NextResponse.json({ success: false, error: "Invalid type" }, { status: 400 });
@@ -247,7 +248,7 @@ export async function GET(request: Request) {
         ? extension.status !== "inactive"
         : extension.isActive !== false;
       const allowedNsfw = showNsfw || (extension.nsfw !== true && extension.isNsfw !== true);
-      return active && allowedNsfw;
+      return (includeInactive || active) && allowedNsfw;
     });
 
     if (type) extensions = extensions.filter((extension) => extension.type === type);

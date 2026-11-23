@@ -124,6 +124,9 @@ export default function Home() {
     downloadUrl: string;
     changelog: string;
     maintenanceMode: boolean;
+    fileSize: string;
+    releasedAt: string;
+    releases: { id: string; versionName: string; versionCode: number; apkUrl: string; fileSize: string; channel: string; forceUpdate: boolean; changelog: string; releasedAt: string }[];
     announcement?: {
       active: boolean;
       title: string;
@@ -135,6 +138,9 @@ export default function Home() {
     downloadUrl: "/aplikasi/Komryuu.apk",
     changelog: "Pembaruan v1.2.0:\n• Integrasi Cloud Sync Firestore riwayat dan bookmark real-time\n• Auto-healing scraper Shinigami, Ikiru, dan Komikcast\n• Mode offline caching dengan kompresi gambar WebP\n• Remote Extension Manager & mirror fallback server.",
     maintenanceMode: false,
+    fileSize: "",
+    releasedAt: "",
+    releases: [],
     announcement: undefined,
   });
 
@@ -153,6 +159,9 @@ export default function Home() {
             downloadUrl: data.apkUrl || data.appUpdate?.downloadUrl || prev.downloadUrl,
             changelog: data.changelog || data.appUpdate?.changelog || prev.changelog,
             maintenanceMode: Boolean(data.maintenanceMode),
+            fileSize: typeof data.fileSize === "string" ? data.fileSize : prev.fileSize,
+            releasedAt: typeof data.releasedAt === "string" ? data.releasedAt : prev.releasedAt,
+            releases: Array.isArray(data.releases) ? data.releases : prev.releases,
             announcement: data.announcement || (data.broadcastBanner?.isActive ? {
               active: true,
               title: data.broadcastBanner.title || "Pengumuman",
@@ -262,6 +271,9 @@ export default function Home() {
             downloadUrl: typeof data.apkUrl === "string" ? data.apkUrl : (typeof update.downloadUrl === "string" && update.downloadUrl ? update.downloadUrl : "/aplikasi/Komryuu.apk"),
             changelog: typeof data.changelog === "string" ? data.changelog : (typeof update.changelog === "string" ? update.changelog : "Peningkatan performa dan sinkronisasi cloud."),
             maintenanceMode: data.maintenanceMode === true,
+            fileSize: typeof data.fileSize === "string" ? data.fileSize : "",
+            releasedAt: typeof data.releasedAt === "string" ? data.releasedAt : "",
+            releases: Array.isArray(data.releases) ? (data.releases as { id: string; versionName: string; versionCode: number; apkUrl: string; fileSize: string; channel: string; forceUpdate: boolean; changelog: string; releasedAt: string }[]) : [],
             announcement: ann ? {
               active: ann.active === true,
               title: typeof ann.title === "string" ? ann.title : "Pengumuman",
@@ -332,6 +344,8 @@ export default function Home() {
       <Hero
         latestVersion={appConfig.latestVersion}
         downloadUrl={appConfig.downloadUrl}
+        fileSize={appConfig.fileSize}
+        releasedAt={appConfig.releasedAt}
         onOpenChangelog={() => setChangelogOpen(true)}
       />
 
@@ -816,7 +830,7 @@ Content-Type: application/json
               </span>
               <span className="flex items-center gap-1.5">
                 <Check size={14} className="text-emerald-400" />
-                Ukuran ~31.5 MB (Komryuu.apk)
+                Ukuran {appConfig.fileSize || "~31.5 MB"} (Komryuu.apk)
               </span>
             </div>
           </div>
@@ -908,9 +922,45 @@ Content-Type: application/json
                 </div>
                 <div className="rounded-xl border border-white/[0.06] bg-[#14141e] p-3">
                   <span className="text-slate-400">Ukuran APK:</span>
-                  <p className="font-semibold text-white mt-0.5">~31.5 MB</p>
+                  <p className="font-semibold text-white mt-0.5">{appConfig.fileSize || "~31.5 MB"}</p>
                 </div>
               </div>
+
+              {/* Riwayat Versi Sebelumnya */}
+              {appConfig.releases.length > 1 && (
+                <details className="rounded-xl border border-white/[0.06] bg-[#14141e]">
+                  <summary className="cursor-pointer px-4 py-3 text-xs font-semibold text-indigo-300 hover:text-indigo-200 transition">
+                    Lihat Riwayat Versi Sebelumnya ({appConfig.releases.length - 1} rilis lainnya)
+                  </summary>
+                  <div className="border-t border-white/[0.06] px-4 py-3 space-y-2 max-h-48 overflow-y-auto">
+                    {[...appConfig.releases]
+                      .sort((a, b) => new Date(b.releasedAt).getTime() - new Date(a.releasedAt).getTime())
+                      .slice(1)
+                      .map((rel) => (
+                        <div key={rel.id} className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.03] p-2.5">
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="font-semibold text-white">v{rel.versionName}</span>
+                            <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${rel.channel === "beta" ? "bg-amber-400/10 text-amber-300" : "bg-indigo-400/10 text-indigo-300"}`}>
+                              {rel.channel}
+                            </span>
+                            {rel.fileSize && <span className="text-slate-500">{rel.fileSize}</span>}
+                            <span className="text-slate-500">
+                              {new Date(rel.releasedAt).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
+                            </span>
+                          </div>
+                          <a
+                            href={rel.apkUrl}
+                            download
+                            className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[10px] font-semibold text-slate-300 hover:bg-white/[0.06] hover:text-white transition"
+                          >
+                            <Download size={11} />
+                            Download
+                          </a>
+                        </div>
+                      ))}
+                  </div>
+                </details>
+              )}
             </div>
 
             <div className="flex flex-col sm:flex-row items-center justify-end gap-3 border-t border-white/[0.08] pt-4">

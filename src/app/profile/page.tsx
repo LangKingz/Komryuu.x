@@ -165,8 +165,8 @@ function normalizeComicBookmark(item: unknown): ComicBookmark | null {
     rec.updatedAt !== undefined
       ? (rec.updatedAt as string | number)
       : rec.updated_at !== undefined
-      ? (rec.updated_at as string | number)
-      : Date.now();
+        ? (rec.updated_at as string | number)
+        : Date.now();
 
   return {
     comicId: comicId || `comic-${Date.now()}`,
@@ -208,12 +208,12 @@ function normalizeReadingHistory(item: unknown): ReadingHistory | null {
     rec.lastChapterNumber !== undefined
       ? (rec.lastChapterNumber as string | number)
       : rec.last_chapter_number !== undefined
-      ? (rec.last_chapter_number as string | number)
-      : rec.chapter !== undefined
-      ? (rec.chapter as string | number)
-      : rec.lastChapter !== undefined
-      ? (rec.lastChapter as string | number)
-      : "-";
+        ? (rec.last_chapter_number as string | number)
+        : rec.chapter !== undefined
+          ? (rec.chapter as string | number)
+          : rec.lastChapter !== undefined
+            ? (rec.lastChapter as string | number)
+            : "-";
 
   const lastChapterTitle = String(
     rec.lastChapterTitle || rec.last_chapter_title || rec.chapterTitle || rec.chapter_title || ""
@@ -225,8 +225,8 @@ function normalizeReadingHistory(item: unknown): ReadingHistory | null {
     rec.updatedAt !== undefined
       ? (rec.updatedAt as string | number)
       : rec.updated_at !== undefined
-      ? (rec.updated_at as string | number)
-      : Date.now();
+        ? (rec.updated_at as string | number)
+        : Date.now();
 
   return {
     comicId: comicId || `comic-${Date.now()}`,
@@ -605,11 +605,10 @@ export default function ProfilePage() {
       <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 space-y-6">
         {toast && (
           <div
-            className={`rounded-2xl border px-4 py-3 text-sm shadow-lg ${
-              toast.kind === "error"
-                ? "border-rose-400/30 bg-rose-400/10 text-rose-200"
-                : "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
-            }`}
+            className={`rounded-2xl border px-4 py-3 text-sm shadow-lg ${toast.kind === "error"
+              ? "border-rose-400/30 bg-rose-400/10 text-rose-200"
+              : "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
+              }`}
           >
             {toast.message}
           </div>
@@ -699,11 +698,10 @@ export default function ProfilePage() {
           {/* Banner Khusus VIP Status jika role === "vip" */}
           {isVip && vipStatus && (
             <div
-              className={`mt-6 rounded-2xl border p-4 ${
-                vipStatus.isExpired
-                  ? "border-rose-500/30 bg-rose-950/20 text-rose-200"
-                  : "border-purple-500/30 bg-gradient-to-r from-purple-950/30 to-indigo-950/30 text-purple-200"
-              }`}
+              className={`mt-6 rounded-2xl border p-4 ${vipStatus.isExpired
+                ? "border-rose-500/30 bg-rose-950/20 text-rose-200"
+                : "border-purple-500/30 bg-gradient-to-r from-purple-950/30 to-indigo-950/30 text-purple-200"
+                }`}
             >
               <div className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
@@ -758,11 +756,10 @@ export default function ProfilePage() {
               <button
                 type="button"
                 onClick={() => setActiveTab("library")}
-                className={`flex items-center gap-2 rounded-xl px-4 py-2 transition ${
-                  activeTab === "library"
-                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
-                    : "text-slate-400 hover:text-white"
-                }`}
+                className={`flex items-center gap-2 rounded-xl px-4 py-2 transition ${activeTab === "library"
+                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                  : "text-slate-400 hover:text-white"
+                  }`}
               >
                 <BookOpen size={15} />
                 <span>Pustaka Saya</span>
@@ -774,11 +771,10 @@ export default function ProfilePage() {
               <button
                 type="button"
                 onClick={() => setActiveTab("history")}
-                className={`flex items-center gap-2 rounded-xl px-4 py-2 transition ${
-                  activeTab === "history"
-                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
-                    : "text-slate-400 hover:text-white"
-                }`}
+                className={`flex items-center gap-2 rounded-xl px-4 py-2 transition ${activeTab === "history"
+                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                  : "text-slate-400 hover:text-white"
+                  }`}
               >
                 <History size={15} />
                 <span>Riwayat Baca</span>
@@ -790,11 +786,10 @@ export default function ProfilePage() {
               <button
                 type="button"
                 onClick={() => setActiveTab("reports")}
-                className={`flex items-center gap-2 rounded-xl px-4 py-2 transition ${
-                  activeTab === "reports"
-                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
-                    : "text-slate-400 hover:text-white"
-                }`}
+                className={`flex items-center gap-2 rounded-xl px-4 py-2 transition ${activeTab === "reports"
+                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                  : "text-slate-400 hover:text-white"
+                  }`}
               >
                 <Inbox size={15} />
                 <span>Laporan Saya</span>
@@ -815,8 +810,8 @@ export default function ProfilePage() {
                   activeTab === "library"
                     ? "Cari di pustaka komik..."
                     : activeTab === "history"
-                    ? "Cari riwayat baca..."
-                    : "Cari tiket laporan..."
+                      ? "Cari riwayat baca..."
+                      : "Cari tiket laporan..."
                 }
                 className="w-full rounded-xl border border-white/10 bg-[#14141E] py-2 pl-9 pr-3 text-xs text-white outline-none placeholder:text-slate-500 focus:border-indigo-500 transition"
               />
@@ -849,9 +844,8 @@ export default function ProfilePage() {
                           />
                         ) : null}
                         <div
-                          className={`cover-fallback ${
-                            comic.coverUrl ? "hidden" : "flex"
-                          } h-full w-full flex-col items-center justify-center bg-gradient-to-tr from-slate-900 to-indigo-950 p-4 text-center`}
+                          className={`cover-fallback ${comic.coverUrl ? "hidden" : "flex"
+                            } h-full w-full flex-col items-center justify-center bg-gradient-to-tr from-slate-900 to-indigo-950 p-4 text-center`}
                         >
                           <BookOpen size={32} className="text-slate-600 mb-2" />
                           <span className="text-xs text-slate-400 font-medium line-clamp-2">

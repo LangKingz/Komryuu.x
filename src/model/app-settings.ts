@@ -25,6 +25,20 @@ export type AppUpdate = {
   changelog: string;
 };
 
+export type AppReleaseChannel = "stable" | "beta";
+
+export type AppReleaseItem = {
+  id: string;
+  versionName: string;
+  versionCode: number;
+  apkUrl: string;
+  fileSize: string;
+  channel: AppReleaseChannel;
+  forceUpdate: boolean;
+  changelog: string;
+  releasedAt: string;
+};
+
 export type AppSettings = {
   maintenanceMode: boolean;
   maintenanceMessage: string;
@@ -44,6 +58,8 @@ export type AppSettings = {
   minimumAppVersion: string;
   broadcastBanner: BroadcastBanner;
   appUpdate: AppUpdate;
+  releases?: AppReleaseItem[];
+  activeReleaseId?: string;
 };
 
 export const DEFAULT_BROADCAST_BANNER: BroadcastBanner = {
@@ -90,6 +106,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   minimumAppVersion: "1.0.0",
   broadcastBanner: DEFAULT_BROADCAST_BANNER,
   appUpdate: DEFAULT_APP_UPDATE,
+  releases: [],
+  activeReleaseId: "",
 };
 
 export function normalizeAppSettings(value: Record<string, unknown>): AppSettings {
@@ -106,17 +124,17 @@ export function normalizeAppSettings(value: Record<string, unknown>): AppSetting
     typeof rawUpdate.latestVersion === "string" && rawUpdate.latestVersion
       ? rawUpdate.latestVersion
       : typeof rawUpdate.latestAppVersion === "string" && rawUpdate.latestAppVersion
-      ? rawUpdate.latestAppVersion
-      : typeof value.latestVersion === "string" && value.latestVersion
-      ? value.latestVersion
-      : DEFAULT_APP_UPDATE.latestAppVersion;
+        ? rawUpdate.latestAppVersion
+        : typeof value.latestVersion === "string" && value.latestVersion
+          ? value.latestVersion
+          : DEFAULT_APP_UPDATE.latestAppVersion;
 
   const minVersionCode =
     typeof rawUpdate.minVersionCode === "number" && !isNaN(rawUpdate.minVersionCode)
       ? rawUpdate.minVersionCode
       : typeof value.minVersionCode === "number" && !isNaN(value.minVersionCode)
-      ? value.minVersionCode
-      : DEFAULT_APP_UPDATE.minVersionCode;
+        ? value.minVersionCode
+        : DEFAULT_APP_UPDATE.minVersionCode;
 
   const forceUpdate =
     rawUpdate.forceUpdate === true || value.forceUpdate === true;
@@ -125,24 +143,24 @@ export function normalizeAppSettings(value: Record<string, unknown>): AppSetting
     typeof rawUpdate.apkUrl === "string" && rawUpdate.apkUrl
       ? rawUpdate.apkUrl
       : typeof rawUpdate.downloadUrl === "string" && rawUpdate.downloadUrl
-      ? rawUpdate.downloadUrl
-      : typeof value.apkUrl === "string" && value.apkUrl
-      ? value.apkUrl
-      : DEFAULT_APP_UPDATE.downloadUrl;
+        ? rawUpdate.downloadUrl
+        : typeof value.apkUrl === "string" && value.apkUrl
+          ? value.apkUrl
+          : DEFAULT_APP_UPDATE.downloadUrl;
 
   const changelog =
     typeof rawUpdate.changelog === "string"
       ? rawUpdate.changelog
       : typeof value.changelog === "string"
-      ? value.changelog
-      : "";
+        ? value.changelog
+        : "";
 
   const minAppVersion =
     typeof rawUpdate.minAppVersion === "string"
       ? rawUpdate.minAppVersion
       : typeof value.minimumAppVersion === "string"
-      ? value.minimumAppVersion
-      : DEFAULT_APP_UPDATE.minAppVersion;
+        ? value.minimumAppVersion
+        : DEFAULT_APP_UPDATE.minAppVersion;
 
   const rawBanner = (typeof value.broadcastBanner === "object" && value.broadcastBanner !== null)
     ? (value.broadcastBanner as Record<string, unknown>)
@@ -156,19 +174,38 @@ export function normalizeAppSettings(value: Record<string, unknown>): AppSetting
 
   const bannerTitle =
     typeof rawBanner.title === "string" ? rawBanner.title :
-    typeof rawAnnouncement.title === "string" ? rawAnnouncement.title :
-    "";
+      typeof rawAnnouncement.title === "string" ? rawAnnouncement.title :
+        "";
 
   const bannerMessage =
     typeof rawBanner.message === "string" ? rawBanner.message :
-    typeof rawAnnouncement.message === "string" ? rawAnnouncement.message :
-    typeof value.announcement === "string" ? value.announcement :
-    "";
+      typeof rawAnnouncement.message === "string" ? rawAnnouncement.message :
+        typeof value.announcement === "string" ? value.announcement :
+          "";
 
   const rawType = String(rawBanner.type || rawAnnouncement.type || "info").toLowerCase();
   const bannerType: "info" | "warning" | "update" =
     rawType === "warning" || rawType === "urgent" ? "warning" :
-    rawType === "update" ? "update" : "info";
+      rawType === "update" ? "update" : "info";
+
+  // Parse releases array
+  const rawReleases = Array.isArray(value.releases) ? value.releases : [];
+  const releases: AppReleaseItem[] = rawReleases
+    .filter((r): r is Record<string, unknown> => r !== null && typeof r === "object")
+    .map((r) => ({
+      id: typeof r.id === "string" && r.id ? r.id : crypto.randomUUID?.() || String(Date.now()),
+      versionName: typeof r.versionName === "string" ? r.versionName : "1.0.0",
+      versionCode: typeof r.versionCode === "number" && !isNaN(r.versionCode) ? r.versionCode : 1,
+      apkUrl: typeof r.apkUrl === "string" && r.apkUrl ? r.apkUrl : "/aplikasi/Komryuu.apk",
+      fileSize: typeof r.fileSize === "string" ? r.fileSize : "",
+      channel: (r.channel === "beta" ? "beta" : "stable") as AppReleaseChannel,
+      forceUpdate: r.forceUpdate === true,
+      changelog: typeof r.changelog === "string" ? r.changelog : "",
+      releasedAt: typeof r.releasedAt === "string" ? r.releasedAt : new Date().toISOString(),
+    }))
+    .filter((r) => r.versionName && r.apkUrl);
+
+  const activeReleaseId = typeof value.activeReleaseId === "string" ? value.activeReleaseId : "";
 
   return {
     maintenanceMode: value.maintenanceMode === true,
@@ -192,16 +229,16 @@ export function normalizeAppSettings(value: Record<string, unknown>): AppSetting
       typeof value.externalApiKeyHash === "string" ? value.externalApiKeyHash : "",
     rateLimitPerMinute:
       typeof value.rateLimitPerMinute === "number" &&
-      Number.isInteger(value.rateLimitPerMinute) &&
-      value.rateLimitPerMinute >= 1 &&
-      value.rateLimitPerMinute <= 10000
+        Number.isInteger(value.rateLimitPerMinute) &&
+        value.rateLimitPerMinute >= 1 &&
+        value.rateLimitPerMinute <= 10000
         ? value.rateLimitPerMinute
         : DEFAULT_APP_SETTINGS.rateLimitPerMinute,
     extensionCacheTtlSeconds:
       typeof value.extensionCacheTtlSeconds === "number" &&
-      Number.isInteger(value.extensionCacheTtlSeconds) &&
-      value.extensionCacheTtlSeconds >= 0 &&
-      value.extensionCacheTtlSeconds <= 3600
+        Number.isInteger(value.extensionCacheTtlSeconds) &&
+        value.extensionCacheTtlSeconds >= 0 &&
+        value.extensionCacheTtlSeconds <= 3600
         ? value.extensionCacheTtlSeconds
         : DEFAULT_APP_SETTINGS.extensionCacheTtlSeconds,
     allowRegistration: value.allowRegistration !== false,
@@ -224,5 +261,7 @@ export function normalizeAppSettings(value: Record<string, unknown>): AppSetting
       apkUrl,
       changelog,
     },
+    releases,
+    activeReleaseId,
   };
 }

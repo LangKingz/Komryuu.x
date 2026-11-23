@@ -9,7 +9,9 @@ import {
   DownloadSimple,
   Key,
   Megaphone,
+  Plus,
   ShieldWarning,
+  Trash,
   Warning,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
@@ -21,6 +23,7 @@ import {
   DEFAULT_BROADCAST_BANNER,
   normalizeAppSettings,
   type AnnouncementType,
+  type AppReleaseItem,
   type AppSettings,
 } from "@/model/app-settings";
 
@@ -61,6 +64,23 @@ export default function SettingPages() {
   const [toast, setToast] = useState<Toast | null>(null);
   const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
 
+  // Release history state
+  const [releases, setReleases] = useState<AppReleaseItem[]>([]);
+  const [activeReleaseId, setActiveReleaseId] = useState("");
+  const [releaseFormOpen, setReleaseFormOpen] = useState(false);
+  const [fetchingGithub, setFetchingGithub] = useState(false);
+  const [releaseForm, setReleaseForm] = useState({
+    versionName: "",
+    versionCode: 1,
+    apkUrl: "/aplikasi/Komryuu.apk",
+    fileSize: "",
+    channel: "stable" as "stable" | "beta",
+    forceUpdate: false,
+    changelog: "",
+    releasedAt: new Date().toISOString().slice(0, 16),
+  });
+  const [deleteReleaseId, setDeleteReleaseId] = useState<string | null>(null);
+
   useEffect(() => {
     const unsubscribe = onSnapshot(
       doc(db, "SETTINGS", "app_config"),
@@ -70,6 +90,8 @@ export default function SettingPages() {
         setSettings(nextSettings);
         setRateLimitDraft(String(nextSettings.rateLimitPerMinute));
         setCacheTtlDraft(String(nextSettings.extensionCacheTtlSeconds));
+        setReleases(nextSettings.releases ?? []);
+        setActiveReleaseId(nextSettings.activeReleaseId ?? "");
         setLoading(false);
         setError(null);
       },
@@ -594,6 +616,307 @@ export default function SettingPages() {
                 </label>
               </div>
             </section>
+
+            {/* 2.5 SECTION: RIWAYAT RILIS & DISTRIBUSI VERSI APK */}
+            <section className={settingCard}>
+              <div className="mb-5 flex items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <span className="rounded-xl bg-sky-500/10 p-2.5 text-sky-400 border border-sky-500/20">
+                    <DownloadSimple size={22} weight="duotone" />
+                  </span>
+                  <div>
+                    <h2 className="text-lg font-semibold text-white">Riwayat Rilis & Distribusi Versi APK</h2>
+                    <p className="mt-0.5 text-sm text-slate-400">
+                      Kelola riwayat rilis, channel distribusi (Stable / Beta), dan rollback versi 1-klik.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setReleaseFormOpen(!releaseFormOpen)}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-500 transition"
+                >
+                  <Plus size={15} />
+                  {releaseFormOpen ? "Tutup Form" : "Tambah Rilis"}
+                </button>
+              </div>
+
+              {/* Add Release Form */}
+              {releaseFormOpen && (
+                <div className="mb-6 rounded-xl border border-indigo-500/20 bg-[#14141e] p-5 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-indigo-300">Form Rilis Baru</h3>
+                    <button
+                      type="button"
+                      disabled={fetchingGithub}
+                      onClick={async () => {
+                        setFetchingGithub(true);
+                        try {
+                          const res = await fetch("https://api.github.com/repos/langkingz/Komik-Komryuu/releases/latest");
+                          if (!res.ok) throw new Error("GitHub API error");
+                          const gh = await res.json() as Record<string, unknown>;
+                          const assets = Array.isArray(gh.assets) ? gh.assets : [];
+                          const firstAsset = (assets[0] && typeof assets[0] === "object") ? (assets[0] as Record<string, unknown>) : null;
+                          setReleaseForm((prev) => ({
+                            ...prev,
+                            versionName: typeof gh.tag_name === "string" ? gh.tag_name.replace(/^v/, "") : prev.versionName,
+                            changelog: typeof gh.body === "string" ? gh.body : prev.changelog,
+                            apkUrl: firstAsset && typeof firstAsset.browser_download_url === "string" ? firstAsset.browser_download_url : prev.apkUrl,
+                            fileSize: firstAsset && typeof firstAsset.size === "number" ? `${(firstAsset.size / 1024 / 1024).toFixed(1)} MB` : prev.fileSize,
+                            releasedAt: typeof gh.published_at === "string" ? gh.published_at.slice(0, 16) : prev.releasedAt,
+                          }));
+                          setToast({ kind: "success", message: "Data rilis GitHub berhasil diambil." });
+                        } catch (err) {
+                          setToast({ kind: "error", message: `Gagal mengambil data dari GitHub: ${err instanceof Error ? err.message : "unknown"}` });
+                        } finally {
+                          setFetchingGithub(false);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#1c1c28] px-3 py-1.5 text-xs text-slate-300 hover:bg-white/[0.05] disabled:opacity-50 transition"
+                    >
+                      {fetchingGithub ? "Mengambil..." : "⬇ Ambil dari GitHub Release Terbaru"}
+                    </button>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="block text-xs text-slate-300">
+                      Nama Versi *
+                      <input
+                        value={releaseForm.versionName}
+                        placeholder="1.3.0"
+                        onChange={(e) => setReleaseForm((p) => ({ ...p, versionName: e.target.value }))}
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className="block text-xs text-slate-300">
+                      Version Code *
+                      <input
+                        type="number"
+                        min={1}
+                        value={releaseForm.versionCode}
+                        onChange={(e) => setReleaseForm((p) => ({ ...p, versionCode: parseInt(e.target.value, 10) || 1 }))}
+                        className={inputClass}
+                      />
+                    </label>
+                  </div>
+
+                  <label className="block text-xs text-slate-300">
+                    URL Download APK *
+                    <input
+                      value={releaseForm.apkUrl}
+                      placeholder="/aplikasi/Komryuu.apk atau URL GitHub Release"
+                      onChange={(e) => setReleaseForm((p) => ({ ...p, apkUrl: e.target.value }))}
+                      className={inputClass}
+                    />
+                  </label>
+
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <label className="block text-xs text-slate-300">
+                      Ukuran File
+                      <input
+                        value={releaseForm.fileSize}
+                        placeholder="32.5 MB"
+                        onChange={(e) => setReleaseForm((p) => ({ ...p, fileSize: e.target.value }))}
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className="block text-xs text-slate-300">
+                      Channel
+                      <select
+                        value={releaseForm.channel}
+                        onChange={(e) => setReleaseForm((p) => ({ ...p, channel: e.target.value as "stable" | "beta" }))}
+                        className={inputClass}
+                      >
+                        <option value="stable">Stable (Semua User)</option>
+                        <option value="beta">Beta (VIP/Admin)</option>
+                      </select>
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-slate-300 pt-5">
+                      <input
+                        type="checkbox"
+                        checked={releaseForm.forceUpdate}
+                        onChange={(e) => setReleaseForm((p) => ({ ...p, forceUpdate: e.target.checked }))}
+                        className="h-4 w-4 accent-indigo-500"
+                      />
+                      Wajib Update
+                    </label>
+                  </div>
+
+                  <label className="block text-xs text-slate-300">
+                    Changelog
+                    <textarea
+                      rows={3}
+                      value={releaseForm.changelog}
+                      placeholder="- Fitur baru X&#10;- Perbaikan bug Y"
+                      onChange={(e) => setReleaseForm((p) => ({ ...p, changelog: e.target.value }))}
+                      className={inputClass}
+                    />
+                  </label>
+
+                  <button
+                    type="button"
+                    disabled={!releaseForm.versionName.trim() || saving}
+                    onClick={async () => {
+                      const id = crypto.randomUUID?.() || `rel-${Date.now()}`;
+                      const newRelease: AppReleaseItem = {
+                        id,
+                        versionName: releaseForm.versionName.trim(),
+                        versionCode: releaseForm.versionCode,
+                        apkUrl: releaseForm.apkUrl.trim() || "/aplikasi/Komryuu.apk",
+                        fileSize: releaseForm.fileSize.trim(),
+                        channel: releaseForm.channel,
+                        forceUpdate: releaseForm.forceUpdate,
+                        changelog: releaseForm.changelog.trim(),
+                        releasedAt: releaseForm.releasedAt ? new Date(releaseForm.releasedAt).toISOString() : new Date().toISOString(),
+                      };
+                      const updated = [...releases, newRelease];
+                      const ok = await savePatch(
+                        { releases: updated },
+                        { action: "Rilis baru ditambahkan", detail: `v${newRelease.versionName} (${newRelease.channel})` }
+                      );
+                      if (ok) {
+                        setReleaseForm({
+                          versionName: "", versionCode: 1, apkUrl: "/aplikasi/Komryuu.apk",
+                          fileSize: "", channel: "stable", forceUpdate: false, changelog: "",
+                          releasedAt: new Date().toISOString().slice(0, 16),
+                        });
+                        setReleaseFormOpen(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/30 hover:bg-indigo-500 disabled:opacity-50 transition"
+                  >
+                    <Check size={16} />
+                    Simpan Rilis Baru
+                  </button>
+                </div>
+              )}
+
+              {/* Release History List */}
+              {releases.length === 0 ? (
+                <p className="text-sm text-slate-500 text-center py-6">Belum ada riwayat rilis. Tambahkan rilis pertama di atas.</p>
+              ) : (
+                <div className="space-y-3">
+                  {[...releases]
+                    .sort((a, b) => new Date(b.releasedAt).getTime() - new Date(a.releasedAt).getTime())
+                    .map((rel) => {
+                      const isActive = rel.id === activeReleaseId;
+                      return (
+                        <div
+                          key={rel.id}
+                          className={`rounded-xl border p-4 transition ${
+                            isActive
+                              ? "border-emerald-500/30 bg-emerald-500/5"
+                              : "border-white/[0.08] bg-[#14141e]"
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-bold text-white">v{rel.versionName}</span>
+                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold border ${
+                                rel.channel === "beta"
+                                  ? "bg-amber-400/10 text-amber-300 border-amber-400/20"
+                                  : "bg-indigo-400/10 text-indigo-300 border-indigo-400/20"
+                              }`}>
+                                {rel.channel === "beta" ? "Beta" : "Stable"}
+                              </span>
+                              {rel.forceUpdate && (
+                                <span className="rounded-full bg-rose-400/10 px-2 py-0.5 text-[10px] font-semibold text-rose-300 border border-rose-400/20">
+                                  Force Update
+                                </span>
+                              )}
+                              {isActive && (
+                                <span className="rounded-full bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 border border-emerald-400/20">
+                                  ✓ Aktif
+                                </span>
+                              )}
+                              {rel.fileSize && (
+                                <span className="text-[11px] text-slate-500">{rel.fileSize}</span>
+                              )}
+                              <span className="text-[11px] text-slate-500">
+                                {new Date(rel.releasedAt).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              {!isActive && (
+                                <button
+                                  type="button"
+                                  disabled={saving}
+                                  onClick={async () => {
+                                    const releasePatch = handleUpdateRelease({
+                                      latestVersion: rel.versionName,
+                                      apkUrl: rel.apkUrl,
+                                      changelog: rel.changelog,
+                                      forceUpdate: rel.forceUpdate,
+                                    });
+                                    await savePatch(
+                                      { ...releasePatch, activeReleaseId: rel.id },
+                                      { action: "Rollback / aktivasi rilis", detail: `v${rel.versionName} diaktifkan` }
+                                    );
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-1.5 text-xs font-semibold text-indigo-300 hover:bg-indigo-500/20 transition"
+                                >
+                                  <ArrowCounterClockwise size={13} />
+                                  Aktifkan
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                disabled={saving}
+                                onClick={() => setDeleteReleaseId(rel.id)}
+                                className="rounded-lg border border-rose-500/20 p-1.5 text-rose-400 hover:bg-rose-500/10 transition"
+                                title="Hapus rilis"
+                              >
+                                <Trash size={14} />
+                              </button>
+                            </div>
+                          </div>
+
+                          {rel.changelog && (
+                            <p className="mt-2 line-clamp-2 text-xs text-slate-400 whitespace-pre-line">{rel.changelog}</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </section>
+
+            {/* Delete Release Confirmation */}
+            {deleteReleaseId && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
+                <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#1c1c28] p-6 shadow-2xl">
+                  <h3 className="text-lg font-semibold text-white">Hapus rilis ini?</h3>
+                  <p className="mt-2 text-sm text-slate-400">Rilis yang dihapus tidak dapat dikembalikan.</p>
+                  <div className="mt-5 flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setDeleteReleaseId(null)}
+                      className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 hover:bg-white/10"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={async () => {
+                        const updated = releases.filter((r) => r.id !== deleteReleaseId);
+                        const patch: Record<string, unknown> = { releases: updated };
+                        if (activeReleaseId === deleteReleaseId) {
+                          patch.activeReleaseId = "";
+                        }
+                        await savePatch(patch, { action: "Rilis dihapus", detail: `ID: ${deleteReleaseId}` });
+                        setDeleteReleaseId(null);
+                      }}
+                      className="inline-flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500 disabled:opacity-50"
+                    >
+                      <Trash size={15} />
+                      Hapus
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* 3. SECTION: PENGUMUMAN & BROADCAST APLIKASI */}
             <section className={settingCard}>

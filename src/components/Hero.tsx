@@ -24,12 +24,16 @@ import {
 interface HeroProps {
   latestVersion?: string;
   downloadUrl?: string;
+  fileSize?: string;
+  releasedAt?: string;
   onOpenChangelog?: () => void;
 }
 
 const Hero: React.FC<HeroProps> = ({
   latestVersion = "1.2.0",
   downloadUrl = "/aplikasi/Komryuu.apk",
+  fileSize,
+  releasedAt,
   onOpenChangelog,
 }) => {
   return (
@@ -50,6 +54,12 @@ const Hero: React.FC<HeroProps> = ({
             <span className="font-semibold text-white">v{latestVersion} Active</span>
             <span className="text-indigo-400">•</span>
             <span>Unified Comic Ecosystem &amp; Cloud Sync Gateway</span>
+            {releasedAt && (
+              <>
+                <span className="text-indigo-400">•</span>
+                <span className="text-indigo-200">{new Date(releasedAt).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}</span>
+              </>
+            )}
             {onOpenChangelog && (
               <>
                 <span className="text-indigo-400">•</span>
@@ -97,7 +107,7 @@ const Hero: React.FC<HeroProps> = ({
               className="inline-flex items-center justify-center gap-2.5 rounded-xl border border-white/10 bg-[#1c1c28] px-7 py-3.5 text-sm font-semibold text-slate-200 backdrop-blur-md transition-all hover:border-white/20 hover:bg-[#232332] hover:text-white"
             >
               <Download size={17} className="text-indigo-400" />
-              <span>Download Aplikasi Android (v{latestVersion})</span>
+              <span>Download Android (v{latestVersion}{fileSize ? ` • ${fileSize}` : ""})</span>
             </a>
           </div>
 
