@@ -12,7 +12,9 @@ import {
   onSnapshot,
   orderBy,
   query,
+  setDoc,
   Timestamp,
+  updateDoc,
   where,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
@@ -23,8 +25,10 @@ import {
   BookOpen,
   Bug,
   Calendar,
+  Check,
   CheckCircle2,
   Clock,
+  Copy,
   Crown,
   Download,
   ExternalLink,
@@ -37,12 +41,16 @@ import {
   Info,
   Layers,
   Loader2,
+  Lock,
   LogOut,
   MessageSquare,
+  Plus,
   Search,
+  Share2,
   Shield,
   Smartphone,
   Sparkles,
+  Upload,
   User as UserIcon,
   Wrench,
   Zap,
@@ -247,6 +255,7 @@ export default function ProfilePage() {
 
   const [userData, setUserData] = useState<{
     role: string;
+    isPublicLibrary?: boolean;
     vipExpiresAt?: unknown;
     permissions: {
       canAccessAdminPanel: boolean;
@@ -282,6 +291,25 @@ export default function ProfilePage() {
   // Toast notification
   const [toast, setToast] = useState<{ kind: "success" | "error"; message: string } | null>(null);
 
+  // Share & public library state
+  const [updatingPublic, setUpdatingPublic] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+
+  // Import backup state
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importData, setImportData] = useState<{ library: ComicBookmark[]; history: ReadingHistory[] } | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  // Request feature/extension modal state
+  const [requestModalOpen, setRequestModalOpen] = useState(false);
+  const [requestForm, setRequestForm] = useState({
+    title: "",
+    type: "extension" as "extension" | "feature",
+    description: "",
+  });
+  const [submittingRequest, setSubmittingRequest] = useState(false);
+
   useEffect(() => {
     let unsubSnapshot: (() => void) | null = null;
 
@@ -307,6 +335,7 @@ export default function ProfilePage() {
 
           setUserData({
             role,
+            isPublicLibrary: d.isPublicLibrary === true,
             vipExpiresAt: d.vipExpiresAt,
             permissions: {
               canAccessAdminPanel: perms.canAccessAdminPanel === true,
@@ -417,6 +446,241 @@ export default function ProfilePage() {
     document.cookie = "komryuu_session=; path=/; max-age=0;";
     document.cookie = "komryuu_role=; path=/; max-age=0;";
     router.push("/login");
+  }
+
+  // Toggle Public Library
+  async function handleTogglePublicLibrary() {
+    if (!currentUser) return;
+    const nextVal = !userData?.isPublicLibrary;
+    setUpdatingPublic(true);
+    try {
+      await setDoc(doc(db, "USERS", currentUser.uid), { isPublicLibrary: nextVal }, { merge: true });
+      setUserData((prev) => (prev ? { ...prev, isPublicLibrary: nextVal } : null));
+      setToast({
+        kind: "success",
+        message: nextVal
+          ? "Pustaka Anda kini dapat diakses publik via tautan profil."
+          : "Pustaka Anda sekarang bersifat privat.",
+      });
+    } catch (err) {
+      console.error("Toggle public library failed", err);
+      setToast({ kind: "error", message: "Gagal memperbarui status publik pustaka." });
+    } finally {
+      setUpdatingPublic(false);
+    }
+  }
+
+  // Copy Public Link
+  function handleCopyShareLink() {
+    if (!currentUser || typeof window === "undefined") return;
+    const link = `${window.location.origin}/u/${currentUser.uid}`;
+    navigator.clipboard.writeText(link);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2500);
+    setToast({
+      kind: "success",
+      message: userData?.isPublicLibrary
+        ? "Link pustaka publik disalin ke clipboard."
+        : "Link disalin! Pustaka saat ini berstatus privat. Aktifkan toggle Pustaka Publik agar teman Anda bisa membukanya.",
+    });
+  }
+
+  // Handle File Input for JSON Backup Import
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result;
+        if (typeof text !== "string") throw new Error("Gagal membaca file.");
+        const json = JSON.parse(text);
+
+        const rawLib = Array.isArray(json.library)
+          ? json.library
+          : Array.isArray(json.bookmarks)
+          ? json.bookmarks
+          : Array.isArray(json.pustaka)
+          ? json.pustaka
+          : [];
+
+        const rawHist = Array.isArray(json.history)
+          ? json.history
+          : Array.isArray(json.riwayat)
+          ? json.riwayat
+          : [];
+
+        const parsedLib = rawLib
+          .map(normalizeComicBookmark)
+          .filter((i: ComicBookmark | null): i is ComicBookmark => i !== null);
+
+        const parsedHist = rawHist
+          .map(normalizeReadingHistory)
+          .filter((i: ReadingHistory | null): i is ReadingHistory => i !== null);
+
+        if (parsedLib.length === 0 && parsedHist.length === 0) {
+          setToast({
+            kind: "error",
+            message: "File JSON tidak berisi data pustaka atau riwayat baca yang valid.",
+          });
+          return;
+        }
+
+        setImportData({ library: parsedLib, history: parsedHist });
+        setImportModalOpen(true);
+      } catch (err) {
+        console.error("Error parsing JSON backup file", err);
+        setToast({
+          kind: "error",
+          message: "Format file JSON tidak valid. Pastikan memilih file backup Komryuu.",
+        });
+      } finally {
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  // Execute Import / Restore to Firestore
+  async function handleConfirmImport() {
+    if (!currentUser || !importData) return;
+    setImporting(true);
+
+    try {
+      // 1. Merge library with existing
+      const existingLibMap = new Map<string, ComicBookmark>();
+      syncData.library.forEach((item) => existingLibMap.set(item.comicId, item));
+
+      importData.library.forEach((incoming) => {
+        const existing = existingLibMap.get(incoming.comicId);
+        if (!existing) {
+          existingLibMap.set(incoming.comicId, incoming);
+        } else {
+          // Compare timestamps
+          const existingTime = parseDate(existing.updatedAt)?.getTime() || 0;
+          const incomingTime = parseDate(incoming.updatedAt)?.getTime() || 0;
+          if (incomingTime >= existingTime) {
+            existingLibMap.set(incoming.comicId, incoming);
+          }
+        }
+      });
+
+      const mergedLibrary = Array.from(existingLibMap.values());
+
+      // 2. Merge history with existing
+      const existingHistMap = new Map<string, ReadingHistory>();
+      syncData.history.forEach((item) => existingHistMap.set(item.comicId, item));
+
+      importData.history.forEach((incoming) => {
+        const existing = existingHistMap.get(incoming.comicId);
+        if (!existing) {
+          existingHistMap.set(incoming.comicId, incoming);
+        } else {
+          const existingTime = parseDate(existing.updatedAt)?.getTime() || 0;
+          const incomingTime = parseDate(incoming.updatedAt)?.getTime() || 0;
+          if (incomingTime >= existingTime) {
+            existingHistMap.set(incoming.comicId, incoming);
+          }
+        }
+      });
+
+      const mergedHistory = Array.from(existingHistMap.values());
+      const nowIso = new Date().toISOString();
+
+      // 3. Write to USERS/{uid}/sync_data/backup
+      await setDoc(
+        doc(db, "USERS", currentUser.uid, "sync_data", "backup"),
+        {
+          library: mergedLibrary,
+          history: mergedHistory,
+          lastSyncedAt: nowIso,
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      );
+
+      // 4. Update parent USERS/{uid} document summary
+      await setDoc(
+        doc(db, "USERS", currentUser.uid),
+        {
+          libraryCount: mergedLibrary.length,
+          historyCount: mergedHistory.length,
+          lastSyncedAt: nowIso,
+          library: mergedLibrary.slice(0, 500),
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      );
+
+      // 5. Update local state
+      setSyncData({
+        library: mergedLibrary,
+        history: mergedHistory,
+        lastSyncedAt: nowIso,
+      });
+
+      setImportModalOpen(false);
+      setImportData(null);
+      setToast({
+        kind: "success",
+        message: `Berhasil memulihkan ${importData.library.length} bookmark komik dan ${importData.history.length} riwayat baca!`,
+      });
+    } catch (err) {
+      console.error("Failed to restore backup", err);
+      setToast({ kind: "error", message: "Gagal memulihkan data backup ke server." });
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  // Handle Submit Feature/Extension Request
+  async function handleSubmitRequest(e: React.FormEvent) {
+    e.preventDefault();
+    if (!currentUser) return;
+    if (!requestForm.title.trim()) {
+      setToast({ kind: "error", message: "Judul request wajib diisi." });
+      return;
+    }
+    if (!requestForm.description.trim()) {
+      setToast({ kind: "error", message: "Deskripsi request wajib diisi." });
+      return;
+    }
+
+    setSubmittingRequest(true);
+    try {
+      const res = await fetch("/api/v1/requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: requestForm.title.trim(),
+          type: requestForm.type,
+          description: requestForm.description.trim(),
+          createdByUid: currentUser.uid,
+          createdByName: currentUser.displayName || currentUser.email?.split("@")[0] || "Pengguna",
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Gagal mengirim request");
+      }
+
+      setRequestForm({ title: "", type: "extension", description: "" });
+      setRequestModalOpen(false);
+      setToast({
+        kind: "success",
+        message: "Request Anda berhasil dikirim ke papan voting komunitas!",
+      });
+    } catch (err) {
+      console.error("Submit request failed", err);
+      setToast({
+        kind: "error",
+        message: err instanceof Error ? err.message : "Gagal mengirim request.",
+      });
+    } finally {
+      setSubmittingRequest(false);
+    }
   }
 
   // Export JSON Backup
@@ -677,21 +941,99 @@ export default function ProfilePage() {
               </div>
             </div>
 
-            {/* Quick Actions & Export Backup */}
-            <div className="flex flex-wrap md:flex-col items-start md:items-end gap-3">
-              <button
-                type="button"
-                onClick={exportUserBackup}
-                className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white shadow-lg shadow-indigo-600/30 transition hover:bg-indigo-500"
-              >
-                <Download size={15} />
-                <span>Export Backup (.json)</span>
-              </button>
+            {/* Quick Actions, Public Toggle & Backup Management */}
+            <div className="flex flex-col items-start md:items-end gap-3">
+              {/* Top Row Action Buttons */}
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Hidden File Input for Backup Import */}
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  accept=".json,application/json"
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
 
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-400 font-medium">
-                <Smartphone size={13} />
-                <span>Terkoneksi Aplikasi Android</span>
-              </span>
+                <button
+                  type="button"
+                  onClick={exportUserBackup}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-2 text-xs font-semibold text-slate-200 hover:bg-white/[0.08] hover:text-white transition"
+                  title="Unduh file backup riwayat dan bookmark"
+                >
+                  <Download size={14} className="text-indigo-400" />
+                  <span>Export (.json)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-3.5 py-2 text-xs font-semibold text-indigo-300 hover:bg-indigo-500/20 transition"
+                  title="Pulihkan koleksi dari file backup JSON"
+                >
+                  <Upload size={14} />
+                  <span>Import / Pulihkan (.json)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setRequestModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 px-3.5 py-2 text-xs font-semibold text-white shadow-md shadow-purple-600/20 hover:scale-[1.02] transition"
+                  title="Ajukan permintaan ekstensi atau fitur baru"
+                >
+                  <Plus size={14} />
+                  <span>Request Ekstensi</span>
+                </button>
+              </div>
+
+              {/* Public Library Toggle & Share Link Pill */}
+              <div className="flex flex-wrap items-center gap-2.5 rounded-2xl border border-white/[0.08] bg-[#1c1c28] p-2">
+                {/* Toggle Button */}
+                <button
+                  type="button"
+                  disabled={updatingPublic}
+                  onClick={handleTogglePublicLibrary}
+                  className={`inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
+                    userData?.isPublicLibrary
+                      ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                      : "bg-white/[0.05] text-slate-400 border border-white/[0.06] hover:text-slate-300"
+                  }`}
+                >
+                  <span
+                    className={`h-2 w-2 rounded-full ${
+                      userData?.isPublicLibrary ? "bg-emerald-400 animate-pulse" : "bg-slate-500"
+                    }`}
+                  />
+                  <span>
+                    {updatingPublic
+                      ? "Menyimpan..."
+                      : userData?.isPublicLibrary
+                      ? "Pustaka Publik: Aktif"
+                      : "Pustaka Publik: Nonaktif"}
+                  </span>
+                </button>
+
+                {/* Share Link Button */}
+                <button
+                  type="button"
+                  onClick={handleCopyShareLink}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-white/[0.06] hover:text-white transition"
+                  title="Salin link publik pustaka Anda"
+                >
+                  {copiedLink ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+                  <span>{copiedLink ? "Tersalin!" : "Salin Link Koleksi"}</span>
+                </button>
+
+                {userData?.isPublicLibrary && currentUser && (
+                  <Link
+                    href={`/u/${currentUser.uid}`}
+                    target="_blank"
+                    className="inline-flex items-center gap-1 text-slate-400 hover:text-indigo-300 text-xs px-1"
+                    title="Buka halaman publik di tab baru"
+                  >
+                    <ExternalLink size={13} />
+                  </Link>
+                )}
+              </div>
             </div>
           </div>
 
@@ -1080,6 +1422,184 @@ export default function ProfilePage() {
           )}
         </section>
       </main>
+
+      {/* 3. MODAL CONFIRMATION: IMPORT BACKUP */}
+      {importModalOpen && importData && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+        >
+          <div className="relative w-full max-w-md overflow-hidden rounded-3xl border border-white/10 bg-[#1c1c28] p-6 sm:p-7 shadow-2xl">
+            <div className="flex items-center gap-3 border-b border-white/[0.08] pb-4">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                <Upload size={22} />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Pulihkan Backup Koleksi</h3>
+                <p className="text-xs text-slate-400">Gabungkan pustaka dari file .json ke akun Anda</p>
+              </div>
+            </div>
+
+            <div className="my-5 space-y-3 text-xs text-slate-300">
+              <div className="rounded-2xl border border-white/[0.06] bg-[#14141E] p-4 space-y-2">
+                <p className="text-slate-400 font-medium">Data Ditemukan dalam File Backup:</p>
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <div className="rounded-xl bg-white/[0.03] p-2.5">
+                    <span className="text-slate-400">Pustaka Bookmark:</span>
+                    <p className="text-base font-bold text-white mt-0.5">{importData.library.length} Komik</p>
+                  </div>
+                  <div className="rounded-xl bg-white/[0.03] p-2.5">
+                    <span className="text-slate-400">Riwayat Membaca:</span>
+                    <p className="text-base font-bold text-white mt-0.5">{importData.history.length} Judul</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-3 text-indigo-200">
+                <p className="flex items-start gap-1.5 leading-relaxed">
+                  <Info size={14} className="mt-0.5 flex-shrink-0 text-indigo-400" />
+                  <span>
+                    Proses ini akan <strong>menggabungkan (merge)</strong> data secara aman tanpa menghapus komik yang sudah ada di akun Anda saat ini.
+                  </span>
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 border-t border-white/[0.08] pt-4">
+              <button
+                type="button"
+                disabled={importing}
+                onClick={() => {
+                  setImportModalOpen(false);
+                  setImportData(null);
+                }}
+                className="rounded-xl border border-white/10 px-4 py-2.5 text-xs font-semibold text-slate-300 hover:bg-white/[0.06] transition"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={importing}
+                onClick={handleConfirmImport}
+                className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-semibold text-white shadow-lg shadow-indigo-600/30 hover:bg-indigo-500 disabled:opacity-50 transition"
+              >
+                {importing ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                <span>{importing ? "Memulihkan..." : "Pulihkan & Gabungkan"}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. MODAL FORM: AJUKAN REQUEST EKSTENSI / FITUR */}
+      {requestModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+        >
+          <div className="relative w-full max-w-lg overflow-hidden rounded-3xl border border-white/10 bg-[#1c1c28] p-6 sm:p-7 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                  <Sparkles size={22} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Ajukan Request Ekstensi / Fitur</h3>
+                  <p className="text-xs text-slate-400">Request Anda akan dipublikasikan ke papan voting komunitas</p>
+                </div>
+              </div>
+            </div>
+
+            <form onSubmit={handleSubmitRequest} className="my-5 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Tipe Permintaan *
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRequestForm((prev) => ({ ...prev, type: "extension" }))}
+                    className={`rounded-xl border p-3 text-left transition ${
+                      requestForm.type === "extension"
+                        ? "border-purple-500 bg-purple-500/10 text-white"
+                        : "border-white/10 bg-[#14141E] text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    <p className="font-semibold text-xs text-white">Ekstensi Komik Baru</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Website manga, manhwa, manhua</p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setRequestForm((prev) => ({ ...prev, type: "feature" }))}
+                    className={`rounded-xl border p-3 text-left transition ${
+                      requestForm.type === "feature"
+                        ? "border-indigo-500 bg-indigo-500/10 text-white"
+                        : "border-white/10 bg-[#14141E] text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    <p className="font-semibold text-xs text-white">Fitur Baru Aplikasi</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Peningkatan UI atau kapabilitas</p>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Judul Permintaan *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={requestForm.title}
+                  onChange={(e) => setRequestForm((prev) => ({ ...prev, title: e.target.value }))}
+                  placeholder={
+                    requestForm.type === "extension"
+                      ? "Contoh: Ekstensi MangaDex ID / Asura Scans"
+                      : "Contoh: Mode Baca Webtoon Tanpa Batas / Download Batch"
+                  }
+                  className="w-full rounded-xl border border-white/10 bg-[#14141E] px-3.5 py-2.5 text-xs text-white outline-none placeholder:text-slate-500 focus:border-purple-500 transition"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Deskripsi / Alasan *
+                </label>
+                <textarea
+                  required
+                  rows={3}
+                  value={requestForm.description}
+                  onChange={(e) => setRequestForm((prev) => ({ ...prev, description: e.target.value }))}
+                  placeholder="Jelaskan URL sumber website, keuntungan, atau masalah yang ingin Anda selesaikan..."
+                  className="w-full rounded-xl border border-white/10 bg-[#14141E] px-3.5 py-2.5 text-xs text-white outline-none placeholder:text-slate-500 focus:border-purple-500 transition"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3 border-t border-white/[0.08] pt-4">
+                <button
+                  type="button"
+                  disabled={submittingRequest}
+                  onClick={() => setRequestModalOpen(false)}
+                  className="rounded-xl border border-white/10 px-4 py-2.5 text-xs font-semibold text-slate-300 hover:bg-white/[0.06] transition"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingRequest}
+                  className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 px-5 py-2.5 text-xs font-semibold text-white shadow-lg shadow-purple-600/30 hover:scale-[1.02] disabled:opacity-50 transition"
+                >
+                  {submittingRequest ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                  <span>{submittingRequest ? "Mengirim..." : "Kirim Request"}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

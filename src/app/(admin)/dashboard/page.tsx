@@ -10,6 +10,7 @@ import UserPages from "@/components/admin/UserPages";
 import SettingPages from "@/components/admin/SettingPages";
 import ReportPages from "@/components/admin/ReportPages";
 import AuditLogPages from "@/components/admin/AuditLogPages";
+import RequestPages from "@/components/admin/RequestPages";
 import {
   FileText,
   History,
@@ -17,6 +18,7 @@ import {
   Layers,
   LogOut,
   Menu,
+  MessageSquare,
   Server,
   Settings,
   Shield,
@@ -26,7 +28,7 @@ import {
   Zap,
 } from "lucide-react";
 
-export type AdminTab = "Dashboard" | "Users" | "Extensions" | "Reports" | "AuditLogs" | "Settings";
+export type AdminTab = "Dashboard" | "Users" | "Extensions" | "Reports" | "Requests" | "AuditLogs" | "Settings";
 
 const AdminDashboard = () => {
   const router = useRouter();
@@ -58,6 +60,8 @@ const AdminDashboard = () => {
         return <ExtensiPages />;
       case "Reports":
         return <ReportPages />;
+      case "Requests":
+        return <RequestPages />;
       case "AuditLogs":
         return <AuditLogPages />;
       case "Settings":
@@ -73,6 +77,7 @@ const AdminDashboard = () => {
     { label: "Users", title: "Pengguna & Role", icon: Users },
     { label: "Extensions", title: "Ekstensi Sumber", icon: Layers },
     { label: "Reports", title: "Laporan & Tiket", icon: Inbox },
+    { label: "Requests", title: "Request & Voting", icon: MessageSquare },
     { label: "AuditLogs", title: "Audit Log Aktivitas", icon: History },
     { label: "Settings", title: "Pengaturan & API", icon: Settings },
   ];
