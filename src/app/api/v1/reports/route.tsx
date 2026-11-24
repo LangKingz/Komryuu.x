@@ -14,6 +14,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { authorizeExternalApiRequest } from "@/lib/external-api";
+import { authorizeAdminApiRequest } from "@/lib/admin-api";
 import { recordAdminActivity } from "@/lib/admin-activity";
 
 export const dynamic = "force-dynamic";
@@ -22,9 +23,74 @@ function isRecord(val: unknown): val is Record<string, unknown> {
   return typeof val === "object" && val !== null && !Array.isArray(val);
 }
 
+function toIsoDateString(val: unknown, fallback?: string): string {
+  if (!val) return fallback || new Date().toISOString();
+
+  if (val instanceof Date) {
+    return isNaN(val.getTime()) ? fallback || new Date().toISOString() : val.toISOString();
+  }
+
+  // Firestore Timestamp object with toDate()
+  if (typeof val === "object" && val !== null && "toDate" in val) {
+    const toDate = (val as { toDate?: unknown }).toDate;
+    if (typeof toDate === "function") {
+      try {
+        const d = toDate.call(val);
+        if (d instanceof Date && !isNaN(d.getTime())) return d.toISOString();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  // Firestore serialized timestamp: { _seconds, _nanoseconds } or { seconds, nanoseconds }
+  if (typeof val === "object" && val !== null) {
+    const sec =
+      "_seconds" in val
+        ? Number((val as { _seconds: unknown })._seconds)
+        : "seconds" in val
+        ? Number((val as { seconds: unknown }).seconds)
+        : NaN;
+
+    if (!isNaN(sec) && sec > 0) {
+      return new Date(sec * 1000).toISOString();
+    }
+  }
+
+  if (typeof val === "number" && !isNaN(val)) {
+    const d = new Date(val);
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+
+  if (typeof val === "string") {
+    const trimmed = val.trim();
+    const d = new Date(trimmed);
+    if (!isNaN(d.getTime())) return d.toISOString();
+    return trimmed;
+  }
+
+  return fallback || new Date().toISOString();
+}
+
+async function authorizeAdminOrMobileRequest(request: Request) {
+  // 1. Allow if x-admin-api-key is present and matches
+  if (request.headers.get("x-admin-api-key")) {
+    const adminAuth = authorizeAdminApiRequest(request);
+    if (adminAuth) return { authorized: false, response: adminAuth };
+    return { authorized: true };
+  }
+
+  // 2. Standard external API key authorization
+  const externalAuth = await authorizeExternalApiRequest(request, { allowMaintenance: true });
+  if (!externalAuth.authorized) {
+    return { authorized: false, response: externalAuth.response };
+  }
+  return { authorized: true };
+}
+
 export async function POST(request: Request) {
-  const authorization = await authorizeExternalApiRequest(request);
-  if (!authorization.authorized) return authorization.response;
+  const authCheck = await authorizeAdminOrMobileRequest(request);
+  if (!authCheck.authorized) return authCheck.response;
 
   let body: unknown;
   try {
@@ -93,6 +159,7 @@ export async function POST(request: Request) {
   }
 
   try {
+    const nowIso = new Date().toISOString();
     const reportRef = await addDoc(collection(db, "REPORTS"), {
       type,
       title,
@@ -106,7 +173,7 @@ export async function POST(request: Request) {
       deviceInfo,
       status: "pending", // pending | in_progress | resolved
       adminNote: "",
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
       updatedAt: serverTimestamp(),
     });
 
@@ -115,6 +182,7 @@ export async function POST(request: Request) {
         success: true,
         reportId: reportRef.id,
         message: "Laporan berhasil diterima dan tercatat di antrean perbaikan.",
+        createdAt: nowIso,
       },
       { status: 201 }
     );
@@ -128,8 +196,8 @@ export async function POST(request: Request) {
 }
 
 export async function GET(request: Request) {
-  const authorization = await authorizeExternalApiRequest(request);
-  if (!authorization.authorized) return authorization.response;
+  const authCheck = await authorizeAdminOrMobileRequest(request);
+  if (!authCheck.authorized) return authCheck.response;
 
   try {
     const reportsQuery = query(
@@ -138,10 +206,15 @@ export async function GET(request: Request) {
       limit(100)
     );
     const snap = await getDocs(reportsQuery);
-    const reports = snap.docs.map((docItem) => ({
-      id: docItem.id,
-      ...docItem.data(),
-    }));
+    const reports = snap.docs.map((docItem) => {
+      const data = docItem.data();
+      return {
+        id: docItem.id,
+        ...data,
+        createdAt: toIsoDateString(data.createdAt),
+        updatedAt: data.updatedAt ? toIsoDateString(data.updatedAt) : undefined,
+      };
+    });
 
     return NextResponse.json({
       success: true,
@@ -158,8 +231,8 @@ export async function GET(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  const authorization = await authorizeExternalApiRequest(request);
-  if (!authorization.authorized) return authorization.response;
+  const authCheck = await authorizeAdminOrMobileRequest(request);
+  if (!authCheck.authorized) return authCheck.response;
 
   const { searchParams } = new URL(request.url);
   let body: Record<string, unknown> = {};
@@ -170,9 +243,16 @@ export async function PATCH(request: Request) {
     // query param fallback
   }
 
-  const id = searchParams.get("id")?.trim() || (typeof body.id === "string" ? body.id.trim() : "");
+  // Extract ID flexibly
+  const id = (
+    searchParams.get("id")?.trim() ||
+    searchParams.get("reportId")?.trim() ||
+    (typeof body.id === "string" ? body.id.trim() : "") ||
+    (typeof body.reportId === "string" ? body.reportId.trim() : "")
+  );
+
   if (!id) {
-    return NextResponse.json({ success: false, error: "id is required" }, { status: 400 });
+    return NextResponse.json({ success: false, error: "id or reportId is required" }, { status: 400 });
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -180,10 +260,27 @@ export async function PATCH(request: Request) {
     updatedAt: serverTimestamp(),
   };
 
+  // Support flexible status values from mobile
   if (body.status !== undefined) {
-    const rawStatus = String(body.status).toLowerCase();
-    if (rawStatus === "pending" || rawStatus === "in_progress" || rawStatus === "resolved") {
-      updates.status = rawStatus;
+    const rawStatus = String(body.status).toLowerCase().trim();
+    if (rawStatus === "pending" || rawStatus === "menunggu" || rawStatus === "open" || rawStatus === "antrean") {
+      updates.status = "pending";
+    } else if (
+      rawStatus === "in_progress" ||
+      rawStatus === "inprogress" ||
+      rawStatus === "proses" ||
+      rawStatus === "diproses" ||
+      rawStatus === "sedang_diproses"
+    ) {
+      updates.status = "in_progress";
+    } else if (
+      rawStatus === "resolved" ||
+      rawStatus === "selesai" ||
+      rawStatus === "done" ||
+      rawStatus === "closed" ||
+      rawStatus === "teratasi"
+    ) {
+      updates.status = "resolved";
     } else {
       return NextResponse.json(
         { success: false, error: "status must be 'pending', 'in_progress', or 'resolved'" },
@@ -192,11 +289,23 @@ export async function PATCH(request: Request) {
     }
   }
 
-  if (body.adminNote !== undefined) {
-    if (typeof body.adminNote !== "string") {
+  // Support flexible admin note keys (adminNote, note, catatan)
+  const incomingNote =
+    body.adminNote !== undefined
+      ? body.adminNote
+      : body.note !== undefined
+      ? body.note
+      : body.catatan !== undefined
+      ? body.catatan
+      : body.admin_note !== undefined
+      ? body.admin_note
+      : undefined;
+
+  if (incomingNote !== undefined) {
+    if (typeof incomingNote !== "string") {
       return NextResponse.json({ success: false, error: "adminNote must be a string" }, { status: 400 });
     }
-    updates.adminNote = body.adminNote.trim();
+    updates.adminNote = incomingNote.trim();
   }
 
   try {
@@ -216,14 +325,21 @@ export async function PATCH(request: Request) {
     try {
       await recordAdminActivity("Tiket Laporan Diperbarui", actionDetail, id);
     } catch (logErr) {
-      console.error("Audit log failed for report update", logErr);
+      console.warn("Audit log failed for report update", logErr);
     }
 
+    const nowIso = new Date().toISOString();
     return NextResponse.json({
       success: true,
       message: "Laporan berhasil diperbarui",
       id,
-      report: { ...existingData, ...updates, id },
+      report: {
+        ...existingData,
+        ...updates,
+        id,
+        createdAt: toIsoDateString(existingData.createdAt),
+        updatedAt: nowIso,
+      },
     });
   } catch (error) {
     console.error("Update report failed:", error);
@@ -236,17 +352,18 @@ export async function PUT(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  const authorization = await authorizeExternalApiRequest(request);
-  if (!authorization.authorized) return authorization.response;
+  const authCheck = await authorizeAdminOrMobileRequest(request);
+  if (!authCheck.authorized) return authCheck.response;
 
   const { searchParams } = new URL(request.url);
-  let id = searchParams.get("id")?.trim();
+  let id = searchParams.get("id")?.trim() || searchParams.get("reportId")?.trim();
 
   if (!id) {
     try {
       const body = await request.json();
-      if (isRecord(body) && typeof body.id === "string") {
-        id = body.id.trim();
+      if (isRecord(body)) {
+        if (typeof body.id === "string") id = body.id.trim();
+        else if (typeof body.reportId === "string") id = body.reportId.trim();
       }
     } catch {
       // ignore
@@ -270,7 +387,7 @@ export async function DELETE(request: Request) {
     try {
       await recordAdminActivity("Tiket Laporan Dihapus", `Tiket ${id} (${title}) dihapus`, id);
     } catch (logErr) {
-      console.error("Audit log failed for report delete", logErr);
+      console.warn("Audit log failed for report delete", logErr);
     }
 
     return NextResponse.json({
