@@ -4,7 +4,12 @@ import { db } from "@/lib/firebase";
 import { authorizeExternalApiRequest } from "@/lib/external-api";
 import { authorizeAdminApiRequest } from "@/lib/admin-api";
 import { recordAdminActivity } from "@/lib/admin-activity";
-import { normalizeAppSettings, type AppReleaseItem } from "@/model/app-settings";
+import {
+  DEFAULT_FEATURE_FLAGS,
+  normalizeAppSettings,
+  type AppReleaseItem,
+  type FeatureState,
+} from "@/model/app-settings";
 
 export const dynamic = "force-dynamic";
 
@@ -106,6 +111,7 @@ export async function GET(request: Request) {
       channel,
       announcement,
       releases: visibleReleases,
+      featureFlags: settings.featureFlags,
       // Backward compatibility keys
       broadcastBanner: settings.broadcastBanner,
       appUpdate: settings.appUpdate,
@@ -271,7 +277,24 @@ export async function POST(request: Request) {
       updates.activeReleaseId = body.activeReleaseId;
     }
 
-    // 5. Additional Settings
+    // 5. Additional Settings & Feature Flags
+    if (isRecord(body.featureFlags)) {
+      const existingFlags = isRecord(existingData.featureFlags) ? existingData.featureFlags : {};
+      const mergedFlags: Record<string, FeatureState> = { ...DEFAULT_FEATURE_FLAGS };
+
+      for (const [k, v] of Object.entries(existingFlags)) {
+        if (v === "enabled" || v === "admin_only" || v === "coming_soon") {
+          mergedFlags[k] = v;
+        }
+      }
+      for (const [k, v] of Object.entries(body.featureFlags)) {
+        if (v === "enabled" || v === "admin_only" || v === "coming_soon") {
+          mergedFlags[k] = v;
+        }
+      }
+      updates.featureFlags = mergedFlags;
+    }
+
     if (body.allowRegistration !== undefined) updates.allowRegistration = Boolean(body.allowRegistration);
     if (body.showNsfw !== undefined) updates.showNsfw = Boolean(body.showNsfw);
     if (typeof body.defaultCategory === "string") updates.defaultCategory = body.defaultCategory;
@@ -287,8 +310,8 @@ export async function POST(request: Request) {
       const actionDesc = updates.maintenanceMode !== undefined
         ? `Maintenance Mode diubah ke: ${updates.maintenanceMode ? "AKTIF" : "NONAKTIF"}`
         : updates.announcement !== undefined
-        ? `Pengumuman broadcast server diperbarui`
-        : `Konfigurasi aplikasi diperbarui via API`;
+          ? `Pengumuman broadcast server diperbarui`
+          : `Konfigurasi aplikasi diperbarui via API`;
       await recordAdminActivity("Konfigurasi Diperbarui", actionDesc);
     } catch (logErr) {
       console.warn("Audit log failed for config update", logErr);

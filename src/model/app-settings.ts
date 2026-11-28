@@ -39,6 +39,15 @@ export type AppReleaseItem = {
   releasedAt: string;
 };
 
+export type FeatureState = "enabled" | "admin_only" | "coming_soon";
+
+export const DEFAULT_FEATURE_FLAGS: Record<string, FeatureState> = {
+  cinemaMode: "admin_only",
+  dohProxy: "enabled",
+  floatingReadBall: "enabled",
+  cloudSync: "enabled",
+};
+
 export type AppSettings = {
   maintenanceMode: boolean;
   maintenanceMessage: string;
@@ -60,6 +69,7 @@ export type AppSettings = {
   appUpdate: AppUpdate;
   releases?: AppReleaseItem[];
   activeReleaseId?: string;
+  featureFlags: Record<string, FeatureState>;
 };
 
 export const DEFAULT_BROADCAST_BANNER: BroadcastBanner = {
@@ -108,6 +118,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   appUpdate: DEFAULT_APP_UPDATE,
   releases: [],
   activeReleaseId: "",
+  featureFlags: { ...DEFAULT_FEATURE_FLAGS },
 };
 
 export function normalizeAppSettings(value: Record<string, unknown>): AppSettings {
@@ -207,6 +218,15 @@ export function normalizeAppSettings(value: Record<string, unknown>): AppSetting
 
   const activeReleaseId = typeof value.activeReleaseId === "string" ? value.activeReleaseId : "";
 
+  const featureFlags: Record<string, FeatureState> = { ...DEFAULT_FEATURE_FLAGS };
+  if (typeof value.featureFlags === "object" && value.featureFlags !== null && !Array.isArray(value.featureFlags)) {
+    for (const [k, v] of Object.entries(value.featureFlags as Record<string, unknown>)) {
+      if (v === "enabled" || v === "admin_only" || v === "coming_soon") {
+        featureFlags[k] = v;
+      }
+    }
+  }
+
   return {
     maintenanceMode: value.maintenanceMode === true,
     maintenanceMessage:
@@ -263,5 +283,6 @@ export function normalizeAppSettings(value: Record<string, unknown>): AppSetting
     },
     releases,
     activeReleaseId,
+    featureFlags,
   };
 }

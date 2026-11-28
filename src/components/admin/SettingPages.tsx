@@ -15,16 +15,19 @@ import {
   Warning,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
+import { Sliders } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { recordAdminActivity } from "@/lib/admin-activity";
 import {
   DEFAULT_APP_SETTINGS,
   DEFAULT_APP_UPDATE,
   DEFAULT_BROADCAST_BANNER,
+  DEFAULT_FEATURE_FLAGS,
   normalizeAppSettings,
   type AnnouncementType,
   type AppReleaseItem,
   type AppSettings,
+  type FeatureState,
 } from "@/model/app-settings";
 
 type Toast = { kind: "success" | "error"; message: string };
@@ -80,6 +83,9 @@ export default function SettingPages() {
     releasedAt: new Date().toISOString().slice(0, 16),
   });
   const [deleteReleaseId, setDeleteReleaseId] = useState<string | null>(null);
+  const [featureFlagsDraft, setFeatureFlagsDraft] = useState<Record<string, FeatureState>>({
+    ...DEFAULT_FEATURE_FLAGS,
+  });
 
   useEffect(() => {
     const unsubscribe = onSnapshot(
@@ -92,6 +98,7 @@ export default function SettingPages() {
         setCacheTtlDraft(String(nextSettings.extensionCacheTtlSeconds));
         setReleases(nextSettings.releases ?? []);
         setActiveReleaseId(nextSettings.activeReleaseId ?? "");
+        setFeatureFlagsDraft(nextSettings.featureFlags ?? { ...DEFAULT_FEATURE_FLAGS });
         setLoading(false);
         setError(null);
       },
@@ -1127,6 +1134,130 @@ export default function SettingPages() {
                     className={inputClass}
                   />
                 </label>
+              </div>
+            </section>
+
+            {/* 4.5 SECTION: KONTROL VISIBILITAS FITUR (FEATURE FLAGS) */}
+            <section className={settingCard}>
+              <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <span className="rounded-xl bg-purple-500/10 p-2.5 text-purple-300 border border-purple-500/20">
+                    <Sliders size={22} />
+                  </span>
+                  <div>
+                    <h2 className="text-lg font-semibold text-white">Kontrol Visibilitas Fitur (Feature Flags)</h2>
+                    <p className="mt-0.5 text-sm text-slate-400">
+                      Atur apakah fitur aplikasi tersedia untuk publik, khusus role Admin (tahap pengembangan), atau berstatus Segera Hadir.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => {
+                    const summary = Object.entries(featureFlagsDraft)
+                      .map(([k, v]) => `${k}=${v}`)
+                      .join(", ");
+                    void savePatch(
+                      { featureFlags: featureFlagsDraft },
+                      {
+                        action: "Feature Flags diperbarui",
+                        detail: summary,
+                      }
+                    );
+                  }}
+                  className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-indigo-600/30 hover:bg-indigo-500 disabled:opacity-50 transition"
+                >
+                  <Check size={16} />
+                  {saving ? "Menyimpan..." : "Simpan Feature Flags"}
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                {[
+                  {
+                    key: "cinemaMode",
+                    label: "Mode Cinema / Nonton",
+                    desc: "Tab dan pemutar video anime/cinema di aplikasi Android.",
+                  },
+                  {
+                    key: "dohProxy",
+                    label: "DNS-over-HTTPS Cloudflare",
+                    desc: "Bypass pemblokiran ISP melalui resolver DoH 1.1.1.1 bawaan.",
+                  },
+                  {
+                    key: "floatingReadBall",
+                    label: "Bola Menu Mengambang",
+                    desc: "Kontrol cepat mengambang saat membaca chapter komik.",
+                  },
+                  {
+                    key: "cloudSync",
+                    label: "Sinkronisasi Cloud",
+                    desc: "Backup & sinkronisasi otomatis bookmark serta riwayat baca ke Firestore.",
+                  },
+                ].map((item) => {
+                  const currentState: FeatureState = featureFlagsDraft[item.key] ?? "enabled";
+                  const options: Array<{ value: FeatureState; label: string; activeClass: string }> = [
+                    {
+                      value: "enabled",
+                      label: "Publik / Aktif",
+                      activeClass: "bg-emerald-600 text-white border-emerald-500 shadow-sm shadow-emerald-600/30",
+                    },
+                    {
+                      value: "admin_only",
+                      label: "Khusus Admin (Dev)",
+                      activeClass: "bg-amber-600 text-white border-amber-500 shadow-sm shadow-amber-600/30",
+                    },
+                    {
+                      value: "coming_soon",
+                      label: "Segera Hadir (Coming Soon)",
+                      activeClass: "bg-purple-600 text-white border-purple-500 shadow-sm shadow-purple-600/30",
+                    },
+                  ];
+
+                  return (
+                    <div
+                      key={item.key}
+                      className="flex flex-col gap-3 rounded-xl border border-white/[0.08] bg-[#14141e] p-4 lg:flex-row lg:items-center lg:justify-between"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-white">{item.label}</span>
+                          <code className="rounded bg-white/[0.05] px-1.5 py-0.5 text-[11px] text-indigo-300">
+                            {item.key}
+                          </code>
+                        </div>
+                        <p className="mt-0.5 text-xs text-slate-400">{item.desc}</p>
+                      </div>
+
+                      <div className="flex flex-wrap gap-1.5">
+                        {options.map((opt) => {
+                          const isSelected = currentState === opt.value;
+                          return (
+                            <button
+                              key={opt.value}
+                              type="button"
+                              disabled={saving}
+                              onClick={() =>
+                                setFeatureFlagsDraft((prev) => ({
+                                  ...prev,
+                                  [item.key]: opt.value,
+                                }))
+                              }
+                              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
+                                isSelected
+                                  ? opt.activeClass
+                                  : "border-white/10 bg-[#1c1c28] text-slate-400 hover:text-white"
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </section>
 
